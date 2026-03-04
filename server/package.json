@@ -1,0 +1,9 @@
+{
+  "name": "sensorguard-server",
+  "version": "1.0.0",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.21.2"
+  }
+}
