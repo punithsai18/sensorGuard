@@ -39,7 +39,7 @@ function scanWindowsApps() {
     `$caps = @(${capabilities});`,
     `foreach ($entry in $caps) {`,
     `  $c,$l = $entry -split '\\|';`,
-    `  $regPath = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\$c";`,
+    `  $regPath = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\' + $c;`,
     `  Get-ChildItem $regPath -ErrorAction SilentlyContinue | ForEach-Object {`,
     `    $v = Get-ItemProperty $_.PsPath -Name Value -ErrorAction SilentlyContinue;`,
     `    if ($v) { Write-Output ($l + '|' + $_.PSChildName + '|' + $v.Value) }`,

@@ -537,6 +537,85 @@ function MicDetailPanel({ microphone }) {
   )
 }
 
+/** All running background apps panel */
+function BackgroundAppsPanel({ processes: procData }) {
+  const [search, setSearch] = useState('')
+
+  const list  = procData?.processes ?? []
+  const note  = procData?.note
+  const error = procData?.error
+
+  const query = search.trim().toLowerCase()
+  const filtered = query
+    ? list.filter(p => p.name.toLowerCase().includes(query))
+    : list
+
+  const hasCpu = list.some(p => p.cpu != null)
+  const hasMem = list.some(p => p.mem != null)
+
+  return (
+    <section className="info-panel lm-panel">
+      <h2 className="panel-title"><span>📋</span> Background Apps (Running Processes)</h2>
+
+      {note && (
+        <div className="lm-os-note">
+          <span>ℹ️</span>
+          <div><p>{note}</p></div>
+        </div>
+      )}
+
+      {error && (
+        <p className="lm-empty" style={{ color: '#f87171' }}>Error: {error}</p>
+      )}
+
+      {!note && !error && (
+        <>
+          <div style={{ padding: '0.5rem 0 0.75rem' }}>
+            <input
+              type="text"
+              className="lm-search"
+              placeholder="Filter by app name…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="lm-panel-body">
+            {filtered.length === 0 ? (
+              <p className="lm-empty">No running processes found.</p>
+            ) : (
+              <div className="lm-table-wrap">
+                <table className="lm-table">
+                  <thead>
+                    <tr>
+                      <th>App / Process</th>
+                      <th>PID</th>
+                      {hasCpu && <th>CPU</th>}
+                      {hasMem && <th>Memory</th>}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filtered.map((p, i) => (
+                      <tr key={p.pid != null ? `${p.pid}-${p.name}` : i}>
+                        <td className="lm-site">🖥️ {p.name}</td>
+                        <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>
+                        {hasCpu && <td>{p.cpu ?? '—'}</td>}
+                        {hasMem && <td>{p.mem ?? '—'}</td>}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          <p className="lm-hint" style={{ marginTop: '0.5rem' }}>
+            Showing {filtered.length} of {list.length} running processes
+          </p>
+        </>
+      )}
+    </section>
+  )
+}
+
 /** Scan footer with last-scan time, countdown, and refresh button */
 function ScanFooter({ lastScan, countdown, loading, onRefresh }) {
   return (
@@ -654,6 +733,7 @@ export default function LiveMonitorPage() {
           <OSAppsPanel  os={data.os} />
           <CameraDetailPanel  camera={data.camera} />
           <MicDetailPanel     microphone={data.microphone} />
+          <BackgroundAppsPanel processes={data.processes} />
         </div>
       )}
 

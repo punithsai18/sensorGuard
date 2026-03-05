@@ -301,6 +301,42 @@ function useRunningProcesses() {
   return { data, loading, error, reload: load }
 }
 
+/**
+ * Fetches the browser permission databases (Chrome / Edge / Firefox) from the
+ * backend so we can annotate each history tab with its stored site permissions.
+ */
+function useBrowserPermissions() {
+  const [data,    setData]    = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const r = await fetch('/api/scan/all')
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      const json = await r.json()
+      setData({
+        chrome  : json.chrome  ?? {},
+        edge    : json.edge    ?? {},
+        firefox : json.firefox ?? {},
+      })
+    } catch (err) {
+      // Non-critical: permissions just won't appear next to tabs
+      console.warn('[SensorGuard] Could not load browser permissions:', err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    load()
+    const id = setInterval(load, BROWSER_TABS_POLL_MS)
+    return () => clearInterval(id)
+  }, [load])
+
+  return { data, loading }
+}
+
 function PermissionRow({ name, state }) {
   const color = STATUS_COLOR[state] ?? STATUS_COLOR.unsupported
   const icon = STATUS_ICON[state] ?? '—'
@@ -328,11 +364,40 @@ const BROWSER_META = [
   { key: 'firefox', icon: '🦊', label: 'Firefox'  },
 ]
 
+const PERM_CHIP_ICON = {
+  camera           : '📷',
+  microphone       : '🎤',
+  geolocation      : '📍',
+  notifications    : '🔔',
+  'clipboard-read' : '📋',
+  'clipboard-write': '📋',
+}
+
+/**
+ * Build a hostname → { permName: status } map from a single browser's
+ * permission scan result (as returned by chrome.js / firefox.js scanners).
+ */
+function buildPermLookup(permData) {
+  if (!permData || permData.error) return {}
+  const map = {}
+  for (const [perm, entries] of Object.entries(permData)) {
+    if (!Array.isArray(entries)) continue
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue
+      const { site, status } = entry
+      if (!site || !status) continue
+      if (!map[site]) map[site] = {}
+      map[site][perm] = status
+    }
+  }
+  return map
+}
+
 /**
  * Shows real browser tabs read from the local history databases via the
  * Node backend. Falls back to a "server not running" notice gracefully.
  */
-function BrowserTabsPanel({ data, loading, error, onReload }) {
+function BrowserTabsPanel({ data, loading, error, onReload, browserPermissions }) {
   const [activeBrowser, setActiveBrowser] = useState('chrome')
 
   const browserData = BROWSER_META.map(({ key, icon, label }) => {
@@ -341,6 +406,12 @@ function BrowserTabsPanel({ data, loading, error, onReload }) {
   })
 
   const active = browserData.find((b) => b.key === activeBrowser)
+
+  // Build a hostname → { permName: status } lookup for the active browser
+  const permLookup = useMemo(
+    () => buildPermLookup(browserPermissions?.[activeBrowser]),
+    [browserPermissions, activeBrowser],
+  )
 
   function formatTime(iso) {
     if (!iso) return null
@@ -407,26 +478,40 @@ function BrowserTabsPanel({ data, loading, error, onReload }) {
           ) : active.tabs.length === 0 ? (
             <p className="info-msg">No recent tab history found for {active.label}.</p>
           ) : (
-            active.tabs.map((tab, i) => (
-              <div key={i} className="bt-tab-entry">
-                <div className="bt-tab-top">
-                  <span className="bt-favicon">
-                    <img
-                      src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname(tab.url))}&sz=16`}
-                      alt=""
-                      width={16}
-                      height={16}
-                      onError={(e) => { e.currentTarget.style.display = 'none' }}
-                    />
-                  </span>
-                  <span className="bt-tab-title">{tab.title || hostname(tab.url)}</span>
-                  {tab.visitedAt && (
-                    <span className="bt-visited">{formatTime(tab.visitedAt)}</span>
+            active.tabs.map((tab, i) => {
+              const host = hostname(tab.url)
+              const perms = permLookup[host] ?? {}
+              const permEntries = Object.entries(perms)
+              return (
+                <div key={i} className="bt-tab-entry">
+                  <div className="bt-tab-top">
+                    <span className="bt-favicon">
+                      <img
+                        src={`https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=16`}
+                        alt=""
+                        width={16}
+                        height={16}
+                        onError={(e) => { e.currentTarget.style.display = 'none' }}
+                      />
+                    </span>
+                    <span className="bt-tab-title">{tab.title || host}</span>
+                    {tab.visitedAt && (
+                      <span className="bt-visited">{formatTime(tab.visitedAt)}</span>
+                    )}
+                  </div>
+                  <div className="bt-tab-url">{tab.url}</div>
+                  {permEntries.length > 0 && (
+                    <div className="bt-tab-perms">
+                      {permEntries.map(([perm, status]) => (
+                        <span key={perm} className={`bt-perm-chip bt-perm-${status}`}>
+                          {PERM_CHIP_ICON[perm] ?? '🔐'} {perm}
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
-                <div className="bt-tab-url">{tab.url}</div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
       )}
@@ -736,6 +821,7 @@ export default function TabsPage() {
   const { data: browserTabsData, loading: browserTabsLoading, error: browserTabsError, reload: reloadTabs } = useBrowserTabs()
   const { data: bgAppsData, loading: bgAppsLoading, error: bgAppsError, reload: reloadBgApps } = useOsBackgroundApps()
   const { data: processesData, loading: processesLoading, error: processesError, reload: reloadProcesses } = useRunningProcesses()
+  const { data: browserPermissions } = useBrowserPermissions()
 
   const counts = useMemo(
     () =>
@@ -771,6 +857,7 @@ export default function TabsPage() {
           loading={browserTabsLoading}
           error={browserTabsError}
           onReload={reloadTabs}
+          browserPermissions={browserPermissions}
         />
 
         {/* Active Background Apps from OS (camera/mic processes + Windows permissions) */}
