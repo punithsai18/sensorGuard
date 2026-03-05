@@ -9,17 +9,18 @@
  * Default port: 3001  (override via PORT env var)
  */
 const express = require('express');
-const cors    = require('cors');
+const cors = require('cors');
 
-const { scanChrome, scanEdge }  = require('./scanners/chrome');
-const { scanFirefox }           = require('./scanners/firefox');
-const { scanWindowsApps }       = require('./scanners/windows');
-const { detectActiveCamera }    = require('./scanners/camera');
-const { scanBrowserTabs }       = require('./scanners/tabs');
+const { parsePrefs } = require('./scanners/chrome');
+const { scanFirefox } = require('./scanners/firefox');
+const { scanWindowsApps } = require('./scanners/windows');
+const { detectActiveCamera } = require('./scanners/camera');
+const { scanBrowserTabs } = require('./scanners/tabs');
 const { detectActiveMicrophone } = require('./scanners/microphone');
-const { scanRunningProcesses }  = require('./scanners/processes');
+const { scanRunningProcesses } = require('./scanners/processes');
+const { getDetectedBrowsers } = require('./scanners/browserDetection');
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
@@ -53,16 +54,22 @@ app.get('/api/scan/all', async (_req, res) => {
   // Chrome, Edge, Windows, Camera are synchronous.
   // Firefox uses the sqlite3 CLI which is also synchronous.
   const result = {
-    timestamp : new Date().toISOString(),
-    platform  : process.platform,
-    chrome    : safeRun(scanChrome),
-    edge      : safeRun(scanEdge),
-    firefox   : safeRun(scanFirefox),
-    os        : safeRun(scanWindowsApps),
-    camera    : safeRun(detectActiveCamera),
+    timestamp: new Date().toISOString(),
+    platform: process.platform,
+    os: safeRun(scanWindowsApps),
+    camera: safeRun(detectActiveCamera),
     microphone: safeRun(detectActiveMicrophone),
-    processes : safeRun(scanRunningProcesses),
+    processes: safeRun(scanRunningProcesses),
   };
+
+  const detected = getDetectedBrowsers();
+  for (const [browser, path] of Object.entries(detected)) {
+    if (browser === 'firefox') {
+      result.firefox = safeRun(() => scanFirefox(path));
+    } else {
+      result[browser] = safeRun(() => parsePrefs(path));
+    }
+  }
 
   res.json(result);
 });

@@ -3,6 +3,7 @@ import './App.css'
 import TabsPage from './TabsPage.jsx'
 import SitePermissionsPage from './SitePermissionsPage.jsx'
 import LiveMonitorPage from './LiveMonitorPage.jsx'
+import ScreenTimePage from './ScreenTimePage.jsx'
 
 // --- Hooks ---
 
@@ -300,6 +301,12 @@ function App() {
           >
             🔴 Live Monitor
           </button>
+          <button
+            className={`nav-tab${page === 'screen-time' ? ' active' : ''}`}
+            onClick={() => setPage('screen-time')}
+          >
+            🕐 Screen Time
+          </button>
         </nav>
       </header>
 
@@ -309,150 +316,152 @@ function App() {
         <SitePermissionsPage />
       ) : page === 'live-monitor' ? (
         <LiveMonitorPage />
+      ) : page === 'screen-time' ? (
+        <ScreenTimePage />
       ) : (
         <main className="sensor-grid">
-        {/* Battery */}
-        <SensorCard
-          title="Battery"
-          icon="🔋"
-          status={batteryError ? 'error' : battery ? 'active' : 'inactive'}
-        >
-          {batteryError ? (
-            <p className="error-msg">{batteryError}</p>
-          ) : battery ? (
-            <>
-              <BatteryBar level={battery.level} charging={battery.charging} />
-              <DataRow label="Status" value={battery.charging ? 'Charging' : 'Discharging'} />
-              <DataRow label="Level" value={battery.level} unit="%" />
-              <DataRow label="Charging Time" value={formatDuration(battery.chargingTime)} />
-              <DataRow label="Remaining Time" value={formatDuration(battery.dischargingTime)} />
-            </>
-          ) : (
-            <p className="loading-msg">Initializing battery sensor…</p>
-          )}
-        </SensorCard>
+          {/* Battery */}
+          <SensorCard
+            title="Battery"
+            icon="🔋"
+            status={batteryError ? 'error' : battery ? 'active' : 'inactive'}
+          >
+            {batteryError ? (
+              <p className="error-msg">{batteryError}</p>
+            ) : battery ? (
+              <>
+                <BatteryBar level={battery.level} charging={battery.charging} />
+                <DataRow label="Status" value={battery.charging ? 'Charging' : 'Discharging'} />
+                <DataRow label="Level" value={battery.level} unit="%" />
+                <DataRow label="Charging Time" value={formatDuration(battery.chargingTime)} />
+                <DataRow label="Remaining Time" value={formatDuration(battery.dischargingTime)} />
+              </>
+            ) : (
+              <p className="loading-msg">Initializing battery sensor…</p>
+            )}
+          </SensorCard>
 
-        {/* Network */}
-        <SensorCard title="Network" icon="📡" status="active">
-          <DataRow label="Status" value={network.online ? '🟢 Online' : '🔴 Offline'} />
-          <DataRow label="Type" value={network.type ?? 'N/A'} />
-          <DataRow label="Effective Type" value={network.effectiveType ?? 'N/A'} />
-          {network.downlink != null && <DataRow label="Downlink" value={network.downlink} unit="Mbps" />}
-          {network.rtt != null && <DataRow label="RTT" value={network.rtt} unit="ms" />}
-          {network.saveData != null && <DataRow label="Data Saver" value={network.saveData ? 'On' : 'Off'} />}
-          {network.type === null && <p className="info-msg">Extended Connection API not available in this browser</p>}
-        </SensorCard>
+          {/* Network */}
+          <SensorCard title="Network" icon="📡" status="active">
+            <DataRow label="Status" value={network.online ? '🟢 Online' : '🔴 Offline'} />
+            <DataRow label="Type" value={network.type ?? 'N/A'} />
+            <DataRow label="Effective Type" value={network.effectiveType ?? 'N/A'} />
+            {network.downlink != null && <DataRow label="Downlink" value={network.downlink} unit="Mbps" />}
+            {network.rtt != null && <DataRow label="RTT" value={network.rtt} unit="ms" />}
+            {network.saveData != null && <DataRow label="Data Saver" value={network.saveData ? 'On' : 'Off'} />}
+            {network.type === null && <p className="info-msg">Extended Connection API not available in this browser</p>}
+          </SensorCard>
 
-        {/* Geolocation */}
-        <SensorCard
-          title="Geolocation"
-          icon="📍"
-          status={geoError ? 'error' : location ? 'active' : 'inactive'}
-        >
-          {geoError ? (
-            <p className="error-msg">{geoError}</p>
-          ) : location ? (
-            <>
-              <DataRow label="Latitude" value={location.latitude} unit="°" />
-              <DataRow label="Longitude" value={location.longitude} unit="°" />
-              <DataRow label="Accuracy" value={location.accuracy} unit="m" />
-              <DataRow label="Altitude" value={location.altitude ?? 'N/A'} unit={location.altitude ? 'm' : ''} />
-              <DataRow label="Speed" value={location.speed ?? 'N/A'} unit={location.speed ? 'm/s' : ''} />
-            </>
-          ) : (
-            <p className="loading-msg">Requesting location permission…</p>
-          )}
-        </SensorCard>
+          {/* Geolocation */}
+          <SensorCard
+            title="Geolocation"
+            icon="📍"
+            status={geoError ? 'error' : location ? 'active' : 'inactive'}
+          >
+            {geoError ? (
+              <p className="error-msg">{geoError}</p>
+            ) : location ? (
+              <>
+                <DataRow label="Latitude" value={location.latitude} unit="°" />
+                <DataRow label="Longitude" value={location.longitude} unit="°" />
+                <DataRow label="Accuracy" value={location.accuracy} unit="m" />
+                <DataRow label="Altitude" value={location.altitude ?? 'N/A'} unit={location.altitude ? 'm' : ''} />
+                <DataRow label="Speed" value={location.speed ?? 'N/A'} unit={location.speed ? 'm/s' : ''} />
+              </>
+            ) : (
+              <p className="loading-msg">Requesting location permission…</p>
+            )}
+          </SensorCard>
 
-        {/* Orientation / Gyroscope */}
-        <SensorCard
-          title="Orientation / Gyroscope"
-          icon="🔄"
-          status={orientError ? 'error' : orientation ? 'active' : 'inactive'}
-        >
-          {orientError ? (
-            <p className="error-msg">{orientError}</p>
-          ) : orientation ? (
-            <>
-              <DataRow label="Alpha (Z-axis / compass)" value={orientation.alpha} unit="°" />
-              <DataRow label="Beta (X-axis / tilt front-back)" value={orientation.beta} unit="°" />
-              <DataRow label="Gamma (Y-axis / tilt left-right)" value={orientation.gamma} unit="°" />
-            </>
-          ) : (
-            <p className="loading-msg">Waiting for orientation data…</p>
-          )}
-        </SensorCard>
+          {/* Orientation / Gyroscope */}
+          <SensorCard
+            title="Orientation / Gyroscope"
+            icon="🔄"
+            status={orientError ? 'error' : orientation ? 'active' : 'inactive'}
+          >
+            {orientError ? (
+              <p className="error-msg">{orientError}</p>
+            ) : orientation ? (
+              <>
+                <DataRow label="Alpha (Z-axis / compass)" value={orientation.alpha} unit="°" />
+                <DataRow label="Beta (X-axis / tilt front-back)" value={orientation.beta} unit="°" />
+                <DataRow label="Gamma (Y-axis / tilt left-right)" value={orientation.gamma} unit="°" />
+              </>
+            ) : (
+              <p className="loading-msg">Waiting for orientation data…</p>
+            )}
+          </SensorCard>
 
-        {/* Motion / Accelerometer */}
-        <SensorCard
-          title="Motion / Accelerometer"
-          icon="📲"
-          status={motionError ? 'error' : motion ? 'active' : 'inactive'}
-        >
-          {motionError ? (
-            <p className="error-msg">{motionError}</p>
-          ) : motion ? (
-            <>
-              {motion.accG && (
-                <>
-                  <p className="section-label">Accel. incl. gravity (m/s²)</p>
-                  <DataRow label="X" value={motion.accG.x} unit="m/s²" />
-                  <DataRow label="Y" value={motion.accG.y} unit="m/s²" />
-                  <DataRow label="Z" value={motion.accG.z} unit="m/s²" />
-                </>
-              )}
-              {motion.acc && (
-                <>
-                  <p className="section-label">Linear acceleration (m/s²)</p>
-                  <DataRow label="X" value={motion.acc.x} unit="m/s²" />
-                  <DataRow label="Y" value={motion.acc.y} unit="m/s²" />
-                  <DataRow label="Z" value={motion.acc.z} unit="m/s²" />
-                </>
-              )}
-              {motion.interval != null && (
-                <DataRow label="Interval" value={motion.interval.toFixed(0)} unit="ms" />
-              )}
-            </>
-          ) : (
-            <p className="loading-msg">Waiting for motion data…</p>
-          )}
-        </SensorCard>
+          {/* Motion / Accelerometer */}
+          <SensorCard
+            title="Motion / Accelerometer"
+            icon="📲"
+            status={motionError ? 'error' : motion ? 'active' : 'inactive'}
+          >
+            {motionError ? (
+              <p className="error-msg">{motionError}</p>
+            ) : motion ? (
+              <>
+                {motion.accG && (
+                  <>
+                    <p className="section-label">Accel. incl. gravity (m/s²)</p>
+                    <DataRow label="X" value={motion.accG.x} unit="m/s²" />
+                    <DataRow label="Y" value={motion.accG.y} unit="m/s²" />
+                    <DataRow label="Z" value={motion.accG.z} unit="m/s²" />
+                  </>
+                )}
+                {motion.acc && (
+                  <>
+                    <p className="section-label">Linear acceleration (m/s²)</p>
+                    <DataRow label="X" value={motion.acc.x} unit="m/s²" />
+                    <DataRow label="Y" value={motion.acc.y} unit="m/s²" />
+                    <DataRow label="Z" value={motion.acc.z} unit="m/s²" />
+                  </>
+                )}
+                {motion.interval != null && (
+                  <DataRow label="Interval" value={motion.interval.toFixed(0)} unit="ms" />
+                )}
+              </>
+            ) : (
+              <p className="loading-msg">Waiting for motion data…</p>
+            )}
+          </SensorCard>
 
-        {/* Display / Screen */}
-        <SensorCard title="Display / Screen" icon="🖥️" status="active">
-          <DataRow label="Resolution" value={`${screenInfo.width} × ${screenInfo.height}`} />
-          <DataRow label="Available" value={`${screenInfo.availWidth} × ${screenInfo.availHeight}`} />
-          <DataRow label="Color Depth" value={screenInfo.colorDepth} unit="bit" />
-          <DataRow label="Pixel Ratio" value={screenInfo.pixelRatio} unit="x" />
-          <DataRow label="Orientation" value={screenInfo.orientation} />
-        </SensorCard>
+          {/* Display / Screen */}
+          <SensorCard title="Display / Screen" icon="🖥️" status="active">
+            <DataRow label="Resolution" value={`${screenInfo.width} × ${screenInfo.height}`} />
+            <DataRow label="Available" value={`${screenInfo.availWidth} × ${screenInfo.availHeight}`} />
+            <DataRow label="Color Depth" value={screenInfo.colorDepth} unit="bit" />
+            <DataRow label="Pixel Ratio" value={screenInfo.pixelRatio} unit="x" />
+            <DataRow label="Orientation" value={screenInfo.orientation} />
+          </SensorCard>
 
-        {/* Memory */}
-        <SensorCard title="Memory (JS Heap)" icon="💾" status={memInfo ? 'active' : 'inactive'}>
-          {memInfo ? (
-            <>
-              <DataRow label="Used" value={memInfo.used} unit="MB" />
-              <DataRow label="Allocated" value={memInfo.total} unit="MB" />
-              <DataRow label="Limit" value={memInfo.limit} unit="MB" />
-            </>
-          ) : (
-            <p className="info-msg">Memory API not available (Chrome-only, non-incognito)</p>
-          )}
-        </SensorCard>
+          {/* Memory */}
+          <SensorCard title="Memory (JS Heap)" icon="💾" status={memInfo ? 'active' : 'inactive'}>
+            {memInfo ? (
+              <>
+                <DataRow label="Used" value={memInfo.used} unit="MB" />
+                <DataRow label="Allocated" value={memInfo.total} unit="MB" />
+                <DataRow label="Limit" value={memInfo.limit} unit="MB" />
+              </>
+            ) : (
+              <p className="info-msg">Memory API not available (Chrome-only, non-incognito)</p>
+            )}
+          </SensorCard>
 
-        {/* System Info */}
-        <SensorCard title="System Info" icon="💻" status="active">
-          <DataRow label="Platform" value={navigator.platform || 'N/A'} />
-          <DataRow label="Language" value={navigator.language} />
-          <DataRow label="CPU Cores" value={navigator.hardwareConcurrency ?? 'N/A'} />
-          <DataRow label="Max Touch Points" value={navigator.maxTouchPoints} />
-          <DataRow label="Cookies Enabled" value={navigator.cookieEnabled ? 'Yes' : 'No'} />
-          <div className="ua-box">
-            <span className="data-label">User Agent</span>
-            <span className="ua-text">{navigator.userAgent}</span>
-          </div>
-        </SensorCard>
-      </main>
+          {/* System Info */}
+          <SensorCard title="System Info" icon="💻" status="active">
+            <DataRow label="Platform" value={navigator.platform || 'N/A'} />
+            <DataRow label="Language" value={navigator.language} />
+            <DataRow label="CPU Cores" value={navigator.hardwareConcurrency ?? 'N/A'} />
+            <DataRow label="Max Touch Points" value={navigator.maxTouchPoints} />
+            <DataRow label="Cookies Enabled" value={navigator.cookieEnabled ? 'Yes' : 'No'} />
+            <div className="ua-box">
+              <span className="data-label">User Agent</span>
+              <span className="ua-text">{navigator.userAgent}</span>
+            </div>
+          </SensorCard>
+        </main>
       )}
 
       <footer className="app-footer">

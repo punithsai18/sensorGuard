@@ -9,9 +9,9 @@
  * Chrome time format: microseconds since 1601-01-01 (Windows FILETIME).
  * Firefox time format: microseconds since 1970-01-01 (Unix epoch µs).
  */
-const fs           = require('fs');
-const path         = require('path');
-const os           = require('os');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 const { execSync } = require('child_process');
 
 // µs offset between 1601-01-01 and 1970-01-01 in milliseconds
@@ -35,28 +35,28 @@ function historyPaths() {
   const plat = process.platform;
 
   if (plat === 'win32') {
-    const local  = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
-    const appdata = process.env.APPDATA     || path.join(home, 'AppData', 'Roaming');
+    const local = process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local');
+    const appdata = process.env.APPDATA || path.join(home, 'AppData', 'Roaming');
     return {
-      chrome  : path.join(local,   'Google', 'Chrome',    'User Data', 'Default', 'History'),
-      edge    : path.join(local,   'Microsoft', 'Edge',   'User Data', 'Default', 'History'),
-      firefox : firefoxPlacesPath(path.join(appdata, 'Mozilla', 'Firefox', 'Profiles')),
+      chrome: path.join(local, 'Google', 'Chrome', 'User Data', 'Default', 'History'),
+      edge: path.join(local, 'Microsoft', 'Edge', 'User Data', 'Default', 'History'),
+      firefox: firefoxPlacesPath(path.join(appdata, 'Mozilla', 'Firefox', 'Profiles')),
     };
   }
   if (plat === 'darwin') {
     const lib = path.join(home, 'Library', 'Application Support');
     return {
-      chrome  : path.join(lib, 'Google', 'Chrome',  'Default', 'History'),
-      edge    : path.join(lib, 'Microsoft Edge',    'Default', 'History'),
-      firefox : firefoxPlacesPath(path.join(home, 'Library', 'Application Support', 'Firefox', 'Profiles')),
+      chrome: path.join(lib, 'Google', 'Chrome', 'Default', 'History'),
+      edge: path.join(lib, 'Microsoft Edge', 'Default', 'History'),
+      firefox: firefoxPlacesPath(path.join(home, 'Library', 'Application Support', 'Firefox', 'Profiles')),
     };
   }
   // Linux / BSD
   return {
-    chrome  : path.join(home, '.config', 'google-chrome',    'Default', 'History'),
-    chromium: path.join(home, '.config', 'chromium',         'Default', 'History'),
-    edge    : path.join(home, '.config', 'microsoft-edge',   'Default', 'History'),
-    firefox : firefoxPlacesPath(path.join(home, '.mozilla', 'firefox')),
+    chrome: path.join(home, '.config', 'google-chrome', 'Default', 'History'),
+    chromium: path.join(home, '.config', 'chromium', 'Default', 'History'),
+    edge: path.join(home, '.config', 'microsoft-edge', 'Default', 'History'),
+    firefox: firefoxPlacesPath(path.join(home, '.mozilla', 'firefox')),
   };
 }
 
@@ -73,20 +73,15 @@ function firefoxPlacesPath(profilesDir) {
 }
 
 /**
- * Copy a SQLite DB to /tmp (avoids WAL lock while browser is running),
- * run a query, delete the copy, and return the raw output.
- *
- * NOTE: `sql` must only ever be a compile-time string literal — never
- * derived from user input — because it is interpolated into a shell command.
+ * Copy a SQLite DB to /tmp via python script and query it natively
+ * using python's built-in sqlite3.
  */
 function querySqlite(dbPath, sql) {
-  const rnd = Math.random().toString(36).slice(2);
-  const tmp = path.join(os.tmpdir(), `sg_tabs_${process.pid}_${rnd}.sqlite`);
-  fs.copyFileSync(dbPath, tmp);
+  const pythonScriptPath = path.join(__dirname, 'sqlite_runner.py');
   try {
-    return execSync(`sqlite3 "${tmp}" "${sql}"`, { encoding: 'utf8', timeout: 8000 });
-  } finally {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    return execSync(`python "${pythonScriptPath}" "${dbPath}" "${sql}"`, { encoding: 'utf8', timeout: 8000 });
+  } catch (e) {
+    throw new Error(`Python sqlite query failed: ${e.message}`);
   }
 }
 
@@ -98,8 +93,8 @@ function parseLine(line, timeConverter) {
   const trimUrl = (url || '').trim();
   if (!trimUrl) return null;
   return {
-    url      : trimUrl,
-    title    : (title || '').trim() || null,
+    url: trimUrl,
+    title: (title || '').trim() || null,
     visitedAt: rawTime ? timeConverter(rawTime.trim()) : null,
   };
 }
@@ -161,9 +156,9 @@ function safeRead(fn) {
 function scanBrowserTabs() {
   const paths = historyPaths();
   return {
-    chrome  : safeRead(() => readChromiumHistory(paths.chrome  || paths.chromium)),
-    edge    : safeRead(() => readChromiumHistory(paths.edge)),
-    firefox : safeRead(() => readFirefoxHistory(paths.firefox)),
+    chrome: safeRead(() => readChromiumHistory(paths.chrome || paths.chromium)),
+    edge: safeRead(() => readChromiumHistory(paths.edge)),
+    firefox: safeRead(() => readFirefoxHistory(paths.firefox)),
   };
 }
 

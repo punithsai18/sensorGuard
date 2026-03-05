@@ -1,28 +1,23 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
 const REFRESH_INTERVAL = 15 // seconds between auto-scans
 
-const BROWSER_LABELS = [
-  { key: 'chrome',  icon: '🟡', label: 'Chrome' },
-  { key: 'edge',    icon: '🔵', label: 'Edge' },
-  { key: 'firefox', icon: '🦊', label: 'Firefox' },
-]
-
 const PERM_TABS = ['camera', 'microphone', 'geolocation', 'notifications']
 
 const PERM_ICON = {
-  camera        : '📷',
-  microphone    : '🎤',
-  geolocation   : '📍',
-  notifications : '🔔',
-  'clipboard-read'  : '📋',
-  'clipboard-write' : '📋',
+  camera: '📷',
+  microphone: '🎤',
+  geolocation: '📍',
+  notifications: '🔔',
+  'clipboard-read': '📋',
+  'clipboard-write': '📋',
 }
 
 const STATUS_COLOR = { allowed: '#4ade80', blocked: '#f87171', ask: '#fbbf24' }
-const STATUS_ICON  = { allowed: '✅', blocked: '🚫', ask: '❓' }
+const STATUS_ICON = { allowed: '✅', blocked: '🚫', ask: '❓' }
 
 // Prefix used when displaying Linux audio device paths
 const SND_DEV_PREFIX = '/dev/snd/'
@@ -39,7 +34,7 @@ async function fetchScan() {
 
 function StatusBadge({ status }) {
   const color = STATUS_COLOR[status] ?? '#64748b'
-  const icon  = STATUS_ICON[status]  ?? '—'
+  const icon = STATUS_ICON[status] ?? '—'
   return (
     <span className="lm-badge" style={{ color, borderColor: color }}>
       {icon} {status}
@@ -98,8 +93,8 @@ function MicAlert({ microphone }) {
  * side-by-side with process name, time detected, and allowed websites.
  */
 function DeviceStatusSummary({ camera, microphone, browserData, scanTime }) {
-  const camActive  = camera?.active ?? false
-  const micActive  = microphone?.active ?? false
+  const camActive = camera?.active ?? false
+  const micActive = microphone?.active ?? false
 
   function procList(devData) {
     return (devData?.processes ?? []).map(p => p.process).filter(Boolean)
@@ -116,10 +111,10 @@ function DeviceStatusSummary({ camera, microphone, browserData, scanTime }) {
     return [...sites].slice(0, 5) // show up to 5
   }
 
-  const camProcs   = procList(camera)
-  const micProcs   = procList(microphone)
-  const camSites   = allowedSites('camera')
-  const micSites   = allowedSites('microphone')
+  const camProcs = procList(camera)
+  const micProcs = procList(microphone)
+  const camSites = allowedSites('camera')
+  const micSites = allowedSites('microphone')
 
   const timeStr = scanTime
     ? scanTime.toLocaleTimeString()
@@ -148,8 +143,8 @@ function DeviceStatusSummary({ camera, microphone, browserData, scanTime }) {
             <span className="ds-val ds-sites">
               {camSites.length > 0
                 ? camSites.map((s, i) => (
-                    <span key={i} className="ds-site-chip">{s}</span>
-                  ))
+                  <span key={i} className="ds-site-chip">{s}</span>
+                ))
                 : <span className="ds-none">no sites recorded</span>}
             </span>
           </div>
@@ -181,8 +176,8 @@ function DeviceStatusSummary({ camera, microphone, browserData, scanTime }) {
             <span className="ds-val ds-sites">
               {micSites.length > 0
                 ? micSites.map((s, i) => (
-                    <span key={i} className="ds-site-chip">{s}</span>
-                  ))
+                  <span key={i} className="ds-site-chip">{s}</span>
+                ))
                 : <span className="ds-none">no sites recorded</span>}
             </span>
           </div>
@@ -285,10 +280,15 @@ function PermTable({ entries }) {
   )
 }
 
-/** Browser scanner panel: tab picker + permission table */
-function BrowserPanel({ browserData }) {
-  const [activeBrowser, setActiveBrowser] = useState('chrome')
-  const [activePerm,    setActivePerm]    = useState('camera')
+function BrowserPanel({ browserData, detectedBrowsers }) {
+  const [activeBrowser, setActiveBrowser] = useState(detectedBrowsers[0] || 'chrome')
+  const [activePerm, setActivePerm] = useState('camera')
+
+  useEffect(() => {
+    if (detectedBrowsers.length > 0 && !detectedBrowsers.includes(activeBrowser)) {
+      setActiveBrowser(detectedBrowsers[0]);
+    }
+  }, [detectedBrowsers, activeBrowser]);
 
   const bData = browserData[activeBrowser]
   const hasError = bData?.error
@@ -299,15 +299,18 @@ function BrowserPanel({ browserData }) {
 
       {/* Browser tabs */}
       <div className="lm-tabs browser-tabs">
-        {BROWSER_LABELS.map(b => (
-          <button
-            key={b.key}
-            className={`lm-tab${activeBrowser === b.key ? ' active' : ''}`}
-            onClick={() => setActiveBrowser(b.key)}
-          >
-            {b.icon} {b.label}
-          </button>
-        ))}
+        {detectedBrowsers.map(b => {
+          const meta = ALL_BROWSERS_META[b] || { icon: '🌐', label: b }
+          return (
+            <button
+              key={b}
+              className={`lm-tab${activeBrowser === b ? ' active' : ''}`}
+              onClick={() => setActiveBrowser(b)}
+            >
+              {meta.icon} {meta.label}
+            </button>
+          )
+        })}
       </div>
 
       {/* Permission type tabs */}
@@ -354,10 +357,10 @@ function BrowserPanel({ browserData }) {
 function OSAppsPanel({ os: osData }) {
   const [activePerm, setActivePerm] = useState('camera')
 
-  const note      = osData?.note
-  const perms     = ['camera', 'microphone', 'geolocation']
-  const entries   = osData?.[activePerm] ?? []
-  const hasError  = Array.isArray(entries) && entries[0]?.error
+  const note = osData?.note
+  const perms = ['camera', 'microphone', 'geolocation']
+  const entries = osData?.[activePerm] ?? []
+  const hasError = Array.isArray(entries) && entries[0]?.error
 
   return (
     <section className="info-panel lm-panel">
@@ -421,11 +424,11 @@ function OSAppsPanel({ os: osData }) {
 
 /** Camera detection detail panel */
 function CameraDetailPanel({ camera }) {
-  const active    = camera?.active ?? false
+  const active = camera?.active ?? false
   const processes = camera?.processes ?? []
-  const devices   = camera?.videoDevices ?? []
-  const note      = camera?.note
-  const error     = camera?.error
+  const devices = camera?.videoDevices ?? []
+  const note = camera?.note
+  const error = camera?.error
 
   return (
     <section className="info-panel lm-panel">
@@ -438,7 +441,7 @@ function CameraDetailPanel({ camera }) {
       </h2>
       <div className="lm-panel-body">
         {error && <p className="lm-empty" style={{ color: '#f87171' }}>{error}</p>}
-        {note  && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
+        {note && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
 
         {devices.length > 0 && (
           <div className="info-row">
@@ -458,7 +461,7 @@ function CameraDetailPanel({ camera }) {
                 <tr>
                   <th>Process</th>
                   {processes.some(p => p.device) && <th>Device</th>}
-                  {processes.some(p => p.pid)    && <th>PID</th>}
+                  {processes.some(p => p.pid) && <th>PID</th>}
                 </tr>
               </thead>
               <tbody>
@@ -466,7 +469,7 @@ function CameraDetailPanel({ camera }) {
                   <tr key={i}>
                     <td className="lm-site" style={{ color: '#f87171' }}>🔴 {p.process}</td>
                     {processes.some(pr => pr.device) && <td>{p.device ? `/dev/${p.device}` : '—'}</td>}
-                    {processes.some(pr => pr.pid)    && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
+                    {processes.some(pr => pr.pid) && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -480,11 +483,11 @@ function CameraDetailPanel({ camera }) {
 
 /** Microphone detection detail panel */
 function MicDetailPanel({ microphone }) {
-  const active    = microphone?.active ?? false
+  const active = microphone?.active ?? false
   const processes = microphone?.processes ?? []
-  const devices   = microphone?.audioDevices ?? []
-  const note      = microphone?.note
-  const error     = microphone?.error
+  const devices = microphone?.audioDevices ?? []
+  const note = microphone?.note
+  const error = microphone?.error
 
   return (
     <section className="info-panel lm-panel">
@@ -497,7 +500,7 @@ function MicDetailPanel({ microphone }) {
       </h2>
       <div className="lm-panel-body">
         {error && <p className="lm-empty" style={{ color: '#f87171' }}>{error}</p>}
-        {note  && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
+        {note && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
 
         {devices.length > 0 && (
           <div className="info-row">
@@ -517,7 +520,7 @@ function MicDetailPanel({ microphone }) {
                 <tr>
                   <th>Process</th>
                   {processes.some(p => p.device) && <th>Device</th>}
-                  {processes.some(p => p.pid)    && <th>PID</th>}
+                  {processes.some(p => p.pid) && <th>PID</th>}
                 </tr>
               </thead>
               <tbody>
@@ -525,7 +528,7 @@ function MicDetailPanel({ microphone }) {
                   <tr key={i}>
                     <td className="lm-site" style={{ color: '#fb923c' }}>🟠 {p.process}</td>
                     {processes.some(pr => pr.device) && <td>{p.device ? `${SND_DEV_PREFIX}${p.device}` : '—'}</td>}
-                    {processes.some(pr => pr.pid)    && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
+                    {processes.some(pr => pr.pid) && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -541,8 +544,8 @@ function MicDetailPanel({ microphone }) {
 function BackgroundAppsPanel({ processes: procData }) {
   const [search, setSearch] = useState('')
 
-  const list  = procData?.processes ?? []
-  const note  = procData?.note
+  const list = procData?.processes ?? []
+  const note = procData?.note
   const error = procData?.error
 
   const query = search.trim().toLowerCase()
@@ -643,10 +646,10 @@ function ScanFooter({ lastScan, countdown, loading, onRefresh }) {
 // ── Main page ──────────────────────────────────────────────────────────────────
 
 export default function LiveMonitorPage() {
-  const [data,      setData]      = useState(null)
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState(null)
-  const [lastScan,  setLastScan]  = useState(null)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [lastScan, setLastScan] = useState(null)
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL)
 
   const scan = useCallback(async () => {
@@ -678,10 +681,13 @@ export default function LiveMonitorPage() {
     return () => clearInterval(id)
   }, [loading])
 
-  const browserData = {
-    chrome  : data?.chrome  ?? {},
-    edge    : data?.edge    ?? {},
-    firefox : data?.firefox ?? {},
+  const detectedBrowsers = useDetectedBrowsers()
+
+  const browserData = {};
+  if (data) {
+    for (const b of detectedBrowsers) {
+      browserData[b] = data[b] || {};
+    }
   }
 
   return (
@@ -729,10 +735,10 @@ export default function LiveMonitorPage() {
       {/* Main content */}
       {data && (
         <div className="lm-grid">
-          <BrowserPanel browserData={browserData} />
-          <OSAppsPanel  os={data.os} />
-          <CameraDetailPanel  camera={data.camera} />
-          <MicDetailPanel     microphone={data.microphone} />
+          <BrowserPanel browserData={browserData} detectedBrowsers={detectedBrowsers} />
+          <OSAppsPanel os={data.os} />
+          <CameraDetailPanel camera={data.camera} />
+          <MicDetailPanel microphone={data.microphone} />
           <BackgroundAppsPanel processes={data.processes} />
         </div>
       )}
