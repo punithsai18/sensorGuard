@@ -10,6 +10,8 @@ import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import websockets
+from websockets.http11 import Response
+from websockets.datastructures import Headers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BrowserMonitor")
@@ -270,9 +272,24 @@ async def main():
     asyncio.create_task(periodic_scan())
     asyncio.create_task(check_new_processes())
     
-    async with websockets.serve(register, "localhost", 8999):
-        logger.info("Browser Monitor WebSocket active on ws://localhost:8999/browser-monitor")
+    async def process_request(connection, request):
+        """Provide a friendly message for non-WebSocket (HTTP) requests."""
+        if request.headers.get("Upgrade", "").lower() != "websocket":
+            return Response(
+                200, 
+                "OK", 
+                Headers([("Content-Type", "text/html"), ("Connection", "close")]),
+                b"<html><body><h1>SensorGuard WebSocket Server</h1><p>This port is for WebSocket connections only. Please use the SensorGuard UI to view data.</p></body></html>"
+            )
+        return None
+
+    # Use 127.0.0.1 to match what the frontend is now calling
+    async with websockets.serve(register, "127.0.0.1", 8999, process_request=process_request):
+        logger.info("Browser Monitor WebSocket active on ws://127.0.0.1:8999/browser-monitor")
         await asyncio.Future()
+
+
+
 
 if __name__ == "__main__":
     asyncio.run(main())

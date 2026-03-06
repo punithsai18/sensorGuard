@@ -10,6 +10,8 @@ import psutil
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import websockets
+from websockets.http11 import Response
+from websockets.datastructures import Headers
 
 try:
     import ctypes
@@ -145,11 +147,18 @@ def get_active_window_info():
 def clean_app_name(name, title):
     if not name: return "Unknown"
     lower_name = name.lower()
+    
     if 'chrome' in lower_name: return 'Google Chrome'
     if 'msedge' in lower_name: return 'Microsoft Edge'
     if 'firefox' in lower_name: return 'Firefox'
-    if 'brave' in lower_name: return 'Brave'
+    if 'brave' in lower_name: return 'Brave Browser'
     if 'opera' in lower_name: return 'Opera'
+    if 'explorer' in lower_name: return 'File Explorer'
+    if 'code' in lower_name: return 'VS Code'
+    if 'discord' in lower_name: return 'Discord'
+    if 'whatsapp' in lower_name: return 'WhatsApp'
+    if 'terminal' in lower_name or 'cmd' in lower_name or 'powershell' in lower_name: return 'Terminal'
+    
     return name.replace('.exe', '')
 
 def get_website_from_title(app_name, title):
@@ -239,9 +248,21 @@ async def main():
     asyncio.create_task(screen_time_loop())
     asyncio.create_task(push_screen_time())
     
-    async with websockets.serve(register, "localhost", 8998):
-        logger.info("Screen Time Tracker running on ws://localhost:8998")
+    async def process_request(connection, request):
+        if request.headers.get("Upgrade", "").lower() != "websocket":
+            return Response(
+                200, 
+                "OK", 
+                Headers([("Content-Type", "text/html"), ("Connection", "close")]),
+                b"<html><body><h1>SensorGuard ScreenTime Tracker</h1><p>This port is for WebSocket connections only.</p></body></html>"
+            )
+        return None
+
+    async with websockets.serve(register, "127.0.0.1", 8998, process_request=process_request):
+        logger.info("Screen Time Tracker running on ws://127.0.0.1:8998")
         await asyncio.Future()
+
+
 
 if __name__ == "__main__":
     asyncio.run(main())

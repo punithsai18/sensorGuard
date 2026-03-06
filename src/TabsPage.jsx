@@ -178,7 +178,7 @@ function useBrowserMonitor() {
     let backoff = 500
 
     function connect() {
-      ws = new WebSocket('ws://localhost:8999/browser-monitor')
+      ws = new WebSocket('ws://127.0.0.1:8999/browser-monitor')
 
       ws.onopen = () => {
         setConnected(true)
@@ -399,6 +399,28 @@ const PERM_CHIP_ICON = {
   notifications: '🔔',
   'clipboard-read': '📋',
   'clipboard-write': '📋',
+}
+
+/**
+ * Utility to map a browser's permission database into a hostname -> perms lookup object.
+ * Format: { "example.com": { "camera": "allowed", "microphone": "blocked" } }
+ */
+function buildPermLookup(data) {
+  const lookup = {}
+  if (!data) return lookup
+
+  // The scanner returns permission entries as arrays under keys like 'camera', 'microphone', etc.
+  const permissionNames = ['camera', 'microphone', 'geolocation', 'notifications']
+
+  for (const pName of permissionNames) {
+    const list = data[pName] || []
+    for (const entry of list) {
+      if (!entry.site) continue
+      if (!lookup[entry.site]) lookup[entry.site] = {}
+      lookup[entry.site][pName] = entry.status
+    }
+  }
+  return lookup
 }
 
 /**

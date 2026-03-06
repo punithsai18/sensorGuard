@@ -18,7 +18,7 @@ let reconnectTimeout = null;
 
 function connect() {
     if (ws) return;
-    ws = new WebSocket('ws://localhost:8999/browser-monitor');
+    ws = new WebSocket('ws://127.0.0.1:8999/browser-monitor');
 
     ws.onmessage = (event) => {
         try {

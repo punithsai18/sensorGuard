@@ -297,7 +297,7 @@ export default function SitePermissionsPage() {
     let backoff = 500
 
     function connect() {
-      ws = new WebSocket('ws://localhost:8998')
+      ws = new WebSocket('ws://127.0.0.1:8998')
 
       ws.onopen = () => {
         setLive(true)
