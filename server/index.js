@@ -21,7 +21,7 @@ const { scanRunningProcesses } = require('./scanners/processes');
 const { getDetectedBrowsers } = require('./scanners/browserDetection');
 
 const app = express();
-const PORT = process.env.PORT || 3002;
+const PORT = process.env.PORT || 3005;
 
 app.use(cors());
 app.use(express.json());
@@ -37,6 +37,67 @@ app.get('/api/health', (_req, res) => {
 app.get('/api/tabs', (_req, res) => {
   try {
     res.json({ timestamp: new Date().toISOString(), ...scanBrowserTabs() });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Screen Time ───────────────────────────────────────────────────────────────
+
+app.get('/api/screentime', (req, res) => {
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const dbPath = path.join(__dirname, '..', 'screen_time.db');
+
+    // Note: Python sqlite3 built-in handles locking better, but Node sqlite3 works for simple reads.
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return res.status(500).json({ error: 'DB not found', details: err.message });
+
+      const targetDate = req.query.date || new Date().toISOString().split('T')[0];
+
+      db.all("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", [targetDate], (err, rows) => {
+        db.close();
+
+        if (err) return res.status(500).json({ error: 'DB read error', details: err.message });
+
+        let total = 0;
+        const apps = {};
+
+        for (const row of rows) {
+          total += row.total_seconds;
+
+          let name = row.app_name;
+          let domain = null;
+          if (name.includes('::')) {
+            const parts = name.split('::');
+            name = parts[0];
+            domain = parts[1];
+          }
+
+          if (!apps[name]) apps[name] = { name, seconds: 0, percent: 0, domains: [] };
+
+          if (!domain) {
+            apps[name].seconds += row.total_seconds;
+          } else {
+            apps[name].seconds += row.total_seconds;
+            apps[name].domains.push({ domain, seconds: row.total_seconds });
+          }
+        }
+
+        const finalApps = Object.values(apps).map(a => {
+          a.percent = total > 0 ? ((a.seconds / total) * 100).toFixed(1) : 0;
+          a.domains.sort((x, y) => y.seconds - x.seconds);
+          return a;
+        }).sort((x, y) => y.seconds - x.seconds);
+
+        res.json({
+          date: targetDate,
+          total_seconds: total,
+          apps: finalApps
+        });
+      });
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

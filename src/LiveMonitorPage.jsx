@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -6,21 +6,29 @@ import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 const REFRESH_INTERVAL = 15 // seconds between auto-scans
 
 const PERM_TABS = ['camera', 'microphone', 'geolocation', 'notifications']
-
 const PERM_ICON = {
-  camera: '📷',
-  microphone: '🎤',
-  geolocation: '📍',
-  notifications: '🔔',
-  'clipboard-read': '📋',
-  'clipboard-write': '📋',
+  camera: '📷', microphone: '🎤', geolocation: '📍', notifications: '🔔',
+  'clipboard-read': '📋', 'clipboard-write': '📋',
 }
 
 const STATUS_COLOR = { allowed: '#4ade80', blocked: '#f87171', ask: '#fbbf24' }
 const STATUS_ICON = { allowed: '✅', blocked: '🚫', ask: '❓' }
 
-// Prefix used when displaying Linux audio device paths
 const SND_DEV_PREFIX = '/dev/snd/'
+
+const KNOWN_APPS = {
+  "Teams.exe": { name: "Microsoft Teams", icon: "Teams" },
+  "Zoom.exe": { name: "Zoom", icon: "Zoom" },
+  "obs64.exe": { name: "OBS Studio", icon: "OBS" },
+  "discord.exe": { name: "Discord", icon: "Discord" },
+  "skype.exe": { name: "Skype", icon: "Skype" },
+  "chrome.exe": { name: "Google Chrome", icon: "Chrome", isBrowser: true },
+  "msedge.exe": { name: "Microsoft Edge", icon: "Edge", isBrowser: true },
+  "brave.exe": { name: "Brave Browser", icon: "Brave", isBrowser: true },
+  "firefox.exe": { name: "Firefox", icon: "Firefox", isBrowser: true },
+  "opera.exe": { name: "Opera", icon: "Opera", isBrowser: true },
+  "Safari": { name: "Safari", icon: "Safari", isBrowser: true }
+}
 
 // ── Data fetching ──────────────────────────────────────────────────────────────
 
@@ -30,7 +38,113 @@ async function fetchScan() {
   return res.json()
 }
 
-// ── Small presentational components ───────────────────────────────────────────
+function useAdvancedSensors() {
+  const [sensors, setSensors] = useState(null);
+  useEffect(() => {
+    let ws;
+    let reconnectTimeout;
+    function connect() {
+      ws = new WebSocket('ws://127.0.0.1:8996');
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === 'sensors_update') setSensors(data.sensors);
+        } catch (e) { }
+      };
+      ws.onclose = () => { reconnectTimeout = setTimeout(connect, 2000); };
+    }
+    connect();
+    return () => { clearTimeout(reconnectTimeout); if (ws) { ws.onclose = null; ws.close(); } };
+  }, []);
+  return sensors;
+}
+
+function useBackgroundWindowTitles() {
+  const [apps, setApps] = useState([]);
+  useEffect(() => {
+    let ws;
+    let reconnectTimeout;
+    function connect() {
+      ws = new WebSocket('ws://127.0.0.1:8997');
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.event === 'background_apps') setApps(data.apps);
+        } catch (e) { }
+      };
+      ws.onclose = () => { reconnectTimeout = setTimeout(connect, 2000); };
+    }
+    connect();
+    return () => { clearTimeout(reconnectTimeout); if (ws) { ws.onclose = null; ws.close(); } };
+  }, []);
+  return apps;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getProcessDetails(procExe, bgApps, browserData) {
+  const exeName = procExe.toLowerCase();
+
+  // Try to match from known apps
+  const matchedKey = Object.keys(KNOWN_APPS).find(k => k.toLowerCase() === exeName);
+  const known = matchedKey ? KNOWN_APPS[matchedKey] : null;
+
+  let displayName = known ? known.name : procExe;
+  let activeTitle = "";
+  let activeDomain = "";
+  let duration = "Unknown";
+
+  // Try to attach window title via background_apps
+  // This is generic window title parsing fallback (Option 2)
+  const windowApp = bgApps.find(a =>
+    a.app.toLowerCase().includes(exeName.replace('.exe', '')) ||
+    (known && a.app.toLowerCase().includes(known.name.toLowerCase()))
+  );
+
+  if (windowApp && windowApp.title) {
+    activeTitle = windowApp.title;
+    if (known && known.isBrowser) {
+      // Extract domain from title (e.g. "Meet - abc - Google Chrome")
+      const parts = activeTitle.rsplit ? activeTitle.rsplit(' - ', 1) : activeTitle.split(' - ');
+      if (parts.length > 1) {
+        let possibleDomain = parts[0];
+        possibleDomain = possibleDomain.replace(/^\(\d+\)\s*/, '');
+        activeDomain = possibleDomain;
+      }
+    }
+  }
+
+  // Fallback 3: Cross reference allowed sites if it's a browser and no domain extracted yet
+  let allowedSites = [];
+  if (known && known.isBrowser) {
+    const browserKey = Object.keys(browserData).find(k => known.name.toLowerCase().includes(k.toLowerCase()));
+    if (browserKey && browserData[browserKey]) {
+      for (const type of ['camera', 'microphone']) {
+        for (const entry of browserData[browserKey][type] || []) {
+          if (entry.status === 'allowed' && entry.site) {
+            allowedSites.push(entry.site);
+          }
+        }
+      }
+    }
+    allowedSites = [...new Set(allowedSites)];
+    if (!activeDomain && allowedSites.length > 0) {
+      activeDomain = "Likely: " + allowedSites[0];
+      activeTitle = "Unknown Tab";
+    }
+  }
+
+  return {
+    displayName,
+    exe: procExe,
+    isBrowser: known?.isBrowser || false,
+    activeDomain,
+    activeTitle,
+    allowedSites
+  };
+}
+
+// ── Components ────────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }) {
   const color = STATUS_COLOR[status] ?? '#64748b'
@@ -42,200 +156,214 @@ function StatusBadge({ status }) {
   )
 }
 
-/** Camera-active alert banner shown when camera.active === true */
-function CameraAlert({ camera }) {
-  if (!camera || !camera.active) return null
-  const procs = camera.processes ?? []
+function MultiSensorAttackAlert({ cameraActive, micActive, sensors }) {
+  const isAttack = useMemo(() => {
+    if (!cameraActive && !micActive) return false;
+    if (!sensors) return false;
+    const clipAccess = sensors.clipboard?.status === 'ACCESSED';
+    const hookDetect = sensors.keyboard?.status === 'DETECTED';
+    return clipAccess || hookDetect;
+  }, [cameraActive, micActive, sensors]);
+
+  if (!isAttack) return null;
+
   return (
-    <div className="lm-alert camera-alert">
-      <span className="lm-alert-icon">⚠️</span>
+    <div className="lm-alert" style={{ background: '#fef2f2', borderColor: '#f87171', color: '#991b1b', marginBottom: '1rem' }}>
+      <span className="lm-alert-icon">🚨</span>
       <div>
-        <strong>Camera Active Right Now</strong>
-        {procs.length > 0 && (
-          <div className="lm-alert-procs">
-            {procs.map((p, i) => (
-              <span key={i} className="lm-proc-badge">
-                {p.process}{p.device ? ` (${p.device})` : ''}{p.pid ? ` pid:${p.pid}` : ''}
-              </span>
-            ))}
-          </div>
-        )}
+        <strong style={{ fontSize: '1.2rem', color: '#b91c1c' }}>MULTI-SENSOR ATTACK ALERT</strong>
+        <p style={{ marginTop: '0.25rem', opacity: 0.9 }}>
+          Camera/Microphone is actively running while an unknown process simultaneously accessed the Clipboard or installed a Global Keyboard Hook.
+        </p>
       </div>
     </div>
-  )
+  );
 }
 
-/** Microphone-active alert banner */
-function MicAlert({ microphone }) {
-  if (!microphone || !microphone.active) return null
-  const procs = microphone.processes ?? []
-  return (
-    <div className="lm-alert mic-alert">
-      <span className="lm-alert-icon">🎤</span>
-      <div>
-        <strong>Microphone Active Right Now</strong>
-        {procs.length > 0 && (
-          <div className="lm-alert-procs">
-            {procs.map((p, i) => (
-              <span key={i} className="lm-proc-badge mic-proc-badge">
-                {p.process}{p.device ? ` (${p.device})` : ''}{p.pid ? ` pid:${p.pid}` : ''}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-/**
- * Device Status Summary — the top "status board" showing camera and mic
- * side-by-side with process name, time detected, and allowed websites.
- */
-function DeviceStatusSummary({ camera, microphone, browserData, scanTime }) {
+function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors }) {
   const camActive = camera?.active ?? false
   const micActive = microphone?.active ?? false
 
-  function procList(devData) {
-    return (devData?.processes ?? []).map(p => p.process).filter(Boolean)
-  }
+  const camProcs = (camera?.processes ?? []).map(p => p.process).filter(Boolean);
+  const micProcs = (microphone?.processes ?? []).map(p => p.process).filter(Boolean);
 
-  /** Gather sites from all browsers that have the given permission allowed. */
-  function allowedSites(permission) {
-    const sites = new Set()
-    for (const bd of Object.values(browserData)) {
-      for (const entry of bd?.[permission] ?? []) {
-        if (entry.status === 'allowed' && entry.site) sites.add(entry.site)
-      }
+  const renderCamMicDetail = (procs) => {
+    if (procs.length === 0) return { process: '—', info: '' };
+    const det = getProcessDetails(procs[0], bgApps, browserData);
+    if (det.isBrowser) {
+      return {
+        process: `${det.displayName} → ${det.activeDomain || 'Unknown'}`,
+        info: det.activeTitle ? `Tab: "${det.activeTitle}"` : ''
+      };
+    } else {
+      return {
+        process: `${det.displayName} (${det.exe})`,
+        info: det.activeTitle ? `Window: "${det.activeTitle}"` : ''
+      };
     }
-    return [...sites].slice(0, 5) // show up to 5
-  }
+  };
 
-  const camProcs = procList(camera)
-  const micProcs = procList(microphone)
-  const camSites = allowedSites('camera')
-  const micSites = allowedSites('microphone')
+  const camDet = renderCamMicDetail(camProcs);
+  const micDet = renderCamMicDetail(micProcs);
 
-  const timeStr = scanTime
-    ? scanTime.toLocaleTimeString()
-    : '—'
+  const sClip = advancedSensors?.clipboard || { status: 'IDLE', info: '—' };
+  const sLoc = advancedSensors?.location || { status: 'IDLE', info: '—' };
+  const sScreen = advancedSensors?.screen_capture || { status: 'IDLE', info: '—' };
+  const sKey = advancedSensors?.keyboard || { status: 'IDLE', info: '—' };
+  const sNet = advancedSensors?.network || { status: 'IDLE', info: '—' };
+  const sUsb = advancedSensors?.usb || { status: 'IDLE', info: '—' };
 
   return (
-    <div className="ds-summary">
-      {/* Camera card */}
-      <div className={`ds-card ${camActive ? 'ds-active' : 'ds-idle'}`}>
-        <div className="ds-card-header">
-          <span className="ds-icon">📷</span>
-          <span className="ds-label">Camera</span>
-          <span className={`ds-status-badge ${camActive ? 'ds-status-active' : 'ds-status-idle'}`}>
-            {camActive ? '● ACTIVE' : '○ IDLE'}
-          </span>
-        </div>
-        <div className="ds-card-body">
-          <div className="ds-row">
-            <span className="ds-key">Process</span>
-            <span className="ds-val">
-              {camProcs.length > 0 ? camProcs.join(', ') : '—'}
-            </span>
-          </div>
-          <div className="ds-row">
-            <span className="ds-key">Allowed for</span>
-            <span className="ds-val ds-sites">
-              {camSites.length > 0
-                ? camSites.map((s, i) => (
-                  <span key={i} className="ds-site-chip">{s}</span>
-                ))
-                : <span className="ds-none">no sites recorded</span>}
-            </span>
-          </div>
-          <div className="ds-row">
-            <span className="ds-key">Scan time</span>
-            <span className="ds-val ds-time">{timeStr}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Microphone card */}
-      <div className={`ds-card ds-card-mic ${micActive ? 'ds-active' : 'ds-idle'}`}>
-        <div className="ds-card-header">
-          <span className="ds-icon">🎤</span>
-          <span className="ds-label">Microphone</span>
-          <span className={`ds-status-badge ${micActive ? 'ds-status-mic-active' : 'ds-status-idle'}`}>
-            {micActive ? '● ACTIVE' : '○ IDLE'}
-          </span>
-        </div>
-        <div className="ds-card-body">
-          <div className="ds-row">
-            <span className="ds-key">Process</span>
-            <span className="ds-val">
-              {micProcs.length > 0 ? micProcs.join(', ') : '—'}
-            </span>
-          </div>
-          <div className="ds-row">
-            <span className="ds-key">Allowed for</span>
-            <span className="ds-val ds-sites">
-              {micSites.length > 0
-                ? micSites.map((s, i) => (
-                  <span key={i} className="ds-site-chip">{s}</span>
-                ))
-                : <span className="ds-none">no sites recorded</span>}
-            </span>
-          </div>
-          <div className="ds-row">
-            <span className="ds-key">Scan time</span>
-            <span className="ds-val ds-time">{timeStr}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Combined device table */}
-      <div className="ds-table-wrap">
-        <table className="ds-table">
+    <section className="info-panel lm-panel" style={{ marginBottom: '1rem' }}>
+      <h2 className="panel-title" style={{ borderBottom: '1px solid #334155' }}><span>🛡️</span> SENSOR STATUS PANEL</h2>
+      <div className="ds-table-wrap" style={{ marginTop: '0' }}>
+        <table className="ds-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr>
-              <th>Device</th>
-              <th>Status</th>
-              <th>App / Process</th>
-              <th>Websites with access</th>
+            <tr style={{ textAlign: 'left', background: '#1e293b', borderBottom: '2px solid #334155' }}>
+              <th style={{ padding: '0.75rem' }}>SENSOR</th>
+              <th style={{ padding: '0.75rem' }}>STATUS</th>
+              <th style={{ padding: '0.75rem' }}>PROCESS DETAIL</th>
+              <th style={{ padding: '0.75rem' }}>RISK</th>
             </tr>
           </thead>
           <tbody>
-            <tr className={camActive ? 'ds-tr-active' : ''}>
-              <td>📷 Camera</td>
-              <td>
-                <span className={`ds-tbl-status ${camActive ? 'ds-status-active' : 'ds-status-idle'}`}>
+            {/* Camera */}
+            <tr style={{ borderBottom: '1px solid #334155', background: camActive ? 'rgba(74, 222, 128, 0.05)' : '' }}>
+              <td style={{ padding: '0.75rem' }}>📷 Camera</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: camActive ? '#4ade80' : '#64748b', fontWeight: 'bold' }}>
                   {camActive ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
-              <td className="ds-proc-col">
-                {camProcs.length > 0 ? camProcs.join(', ') : '—'}
+              <td style={{ padding: '0.75rem' }}>
+                <div>{camActive ? camDet.process : '—'}</div>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{camActive ? camDet.info : ''}</div>
               </td>
-              <td className="ds-sites-col">
-                {camSites.length > 0 ? camSites.join(', ') : '—'}
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: camActive ? '#4ade80' : '#64748b' }}>{camActive ? 'NORMAL' : '—'}</span>
               </td>
             </tr>
-            <tr className={micActive ? 'ds-tr-mic-active' : ''}>
-              <td>🎤 Microphone</td>
-              <td>
-                <span className={`ds-tbl-status ${micActive ? 'ds-status-mic-active' : 'ds-status-idle'}`}>
+
+            {/* Microphone */}
+            <tr style={{ borderBottom: '1px solid #334155', background: micActive ? 'rgba(251, 146, 60, 0.05)' : '' }}>
+              <td style={{ padding: '0.75rem' }}>🎙 Microphone</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: micActive ? '#fb923c' : '#64748b', fontWeight: 'bold' }}>
                   {micActive ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
-              <td className="ds-proc-col">
-                {micProcs.length > 0 ? micProcs.join(', ') : '—'}
+              <td style={{ padding: '0.75rem' }}>
+                <div>{micActive ? micDet.process : '—'}</div>
+                <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{micActive ? micDet.info : ''}</div>
               </td>
-              <td className="ds-sites-col">
-                {micSites.length > 0 ? micSites.join(', ') : '—'}
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: micActive ? '#4ade80' : '#64748b' }}>{micActive ? 'NORMAL' : '—'}</span>
               </td>
             </tr>
+
+            {/* Location */}
+            <tr style={{ borderBottom: '1px solid #334155' }}>
+              <td style={{ padding: '0.75rem' }}>📍 Location</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sLoc.status === 'ACTIVE' ? '#60a5fa' : '#64748b', fontWeight: 'bold' }}>
+                  {sLoc.status === 'ACTIVE' ? '● ACTIVE' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sLoc.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sLoc.status === 'ACTIVE' ? '#60a5fa' : '#64748b' }}>
+                  {sLoc.status === 'ACTIVE' ? 'LOW' : '—'}
+                </span>
+              </td>
+            </tr>
+
+            {/* Clipboard */}
+            <tr style={{ borderBottom: '1px solid #334155', background: sClip.status !== 'IDLE' ? 'rgba(251, 191, 36, 0.05)' : '' }}>
+              <td style={{ padding: '0.75rem' }}>📋 Clipboard</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sClip.status !== 'IDLE' ? '#fbbf24' : '#64748b', fontWeight: 'bold' }}>
+                  {sClip.status !== 'IDLE' ? '⚠ ACCESSED' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sClip.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sClip.status !== 'IDLE' ? '#fbbf24' : '#64748b' }}>
+                  {sClip.status !== 'IDLE' ? 'HIGH' : '—'}
+                </span>
+              </td>
+            </tr>
+
+            {/* Screen Capture */}
+            <tr style={{ borderBottom: '1px solid #334155' }}>
+              <td style={{ padding: '0.75rem' }}>🖥 Screen Cap</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sScreen.status !== 'IDLE' ? '#fbbf24' : '#64748b', fontWeight: 'bold' }}>
+                  {sScreen.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sScreen.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sScreen.status !== 'IDLE' ? '#fbbf24' : '#64748b' }}>
+                  {sScreen.status !== 'IDLE' ? 'HIGH' : '—'}
+                </span>
+              </td>
+            </tr>
+
+            {/* Keyboard Hook */}
+            <tr style={{ borderBottom: '1px solid #334155', background: sKey.status !== 'IDLE' ? 'rgba(248, 113, 113, 0.05)' : '' }}>
+              <td style={{ padding: '0.75rem' }}>⌨ Keyboard Hook</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sKey.status !== 'IDLE' ? '#f87171' : '#64748b', fontWeight: 'bold' }}>
+                  {sKey.status !== 'IDLE' ? '🚨 DETECTED' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sKey.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sKey.status !== 'IDLE' ? '#f87171' : '#64748b', fontWeight: 'bold' }}>
+                  {sKey.status !== 'IDLE' ? 'CRITICAL' : '—'}
+                </span>
+              </td>
+            </tr>
+
+            {/* Network */}
+            <tr style={{ borderBottom: '1px solid #334155' }}>
+              <td style={{ padding: '0.75rem' }}>🌐 Network</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sNet.status !== 'IDLE' ? '#4ade80' : '#64748b', fontWeight: 'bold' }}>
+                  {sNet.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sNet.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sNet.status !== 'IDLE' ? '#4ade80' : '#64748b' }}>
+                  {sNet.status !== 'IDLE' ? 'NORMAL' : '—'}
+                </span>
+              </td>
+            </tr>
+
+            {/* USB */}
+            <tr style={{ borderBottom: 'none' }}>
+              <td style={{ padding: '0.75rem' }}>🔌 USB</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sUsb.status !== 'IDLE' ? '#60a5fa' : '#64748b', fontWeight: 'bold' }}>
+                  {sUsb.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
+                </span>
+              </td>
+              <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sUsb.info}</td>
+              <td style={{ padding: '0.75rem' }}>
+                <span style={{ color: sUsb.status !== 'IDLE' ? '#60a5fa' : '#64748b' }}>
+                  {sUsb.status !== 'IDLE' ? 'LOW' : '—'}
+                </span>
+              </td>
+            </tr>
+
           </tbody>
         </table>
       </div>
-    </div>
+    </section>
   )
 }
 
-/** "Server not running" notice */
 function ServerOffBanner({ error }) {
   return (
     <div className="lm-alert server-off-alert">
@@ -253,7 +381,6 @@ function ServerOffBanner({ error }) {
   )
 }
 
-/** Per-browser permission table for one permission type */
 function PermTable({ entries }) {
   if (!entries || entries.length === 0) {
     return <p className="lm-empty">No recorded permissions for this type.</p>
@@ -296,8 +423,6 @@ function BrowserPanel({ browserData, detectedBrowsers }) {
   return (
     <section className="info-panel lm-panel">
       <h2 className="panel-title"><span>🌐</span> Browser Permissions (Live)</h2>
-
-      {/* Browser tabs */}
       <div className="lm-tabs browser-tabs">
         {detectedBrowsers.map(b => {
           const meta = ALL_BROWSERS_META[b] || { icon: '🌐', label: b }
@@ -312,8 +437,6 @@ function BrowserPanel({ browserData, detectedBrowsers }) {
           )
         })}
       </div>
-
-      {/* Permission type tabs */}
       <div className="lm-tabs perm-tabs">
         {PERM_TABS.map(p => {
           const count = (!hasError && bData?.[p]?.length) || 0
@@ -329,8 +452,6 @@ function BrowserPanel({ browserData, detectedBrowsers }) {
           )
         })}
       </div>
-
-      {/* Content */}
       <div className="lm-panel-body">
         {hasError ? (
           <div className="lm-browser-error">
@@ -340,8 +461,6 @@ function BrowserPanel({ browserData, detectedBrowsers }) {
               <p>{bData.error}</p>
               <p className="lm-hint">
                 Make sure the browser is installed and has been opened at least once.
-                On Windows the Preferences file lives at<br />
-                <code>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Preferences</code>
               </p>
             </div>
           </div>
@@ -353,7 +472,6 @@ function BrowserPanel({ browserData, detectedBrowsers }) {
   )
 }
 
-/** Windows OS app permissions panel */
 function OSAppsPanel({ os: osData }) {
   const [activePerm, setActivePerm] = useState('camera')
 
@@ -365,17 +483,12 @@ function OSAppsPanel({ os: osData }) {
   return (
     <section className="info-panel lm-panel">
       <h2 className="panel-title"><span>🪟</span> Windows App Permissions (Registry)</h2>
-
       {note ? (
         <div className="lm-os-note">
           <span>ℹ️</span>
           <div>
             <strong>Not running on Windows</strong>
             <p>{note}</p>
-            <p className="lm-hint">
-              Registry path on Windows:<br />
-              <code>HKCU\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam</code>
-            </p>
           </div>
         </div>
       ) : (
@@ -422,125 +535,6 @@ function OSAppsPanel({ os: osData }) {
   )
 }
 
-/** Camera detection detail panel */
-function CameraDetailPanel({ camera }) {
-  const active = camera?.active ?? false
-  const processes = camera?.processes ?? []
-  const devices = camera?.videoDevices ?? []
-  const note = camera?.note
-  const error = camera?.error
-
-  return (
-    <section className="info-panel lm-panel">
-      <h2 className="panel-title">
-        <span>📷</span> Active Camera Detection
-        <span className={`lm-status-dot ${active ? 'dot-active' : 'dot-idle'}`} />
-        <span style={{ fontSize: '0.75rem', color: active ? '#4ade80' : '#64748b' }}>
-          {active ? 'IN USE' : 'IDLE'}
-        </span>
-      </h2>
-      <div className="lm-panel-body">
-        {error && <p className="lm-empty" style={{ color: '#f87171' }}>{error}</p>}
-        {note && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
-
-        {devices.length > 0 && (
-          <div className="info-row">
-            <span className="info-label">Video Devices</span>
-            <span className="info-value">{devices.map(d => `/dev/${d}`).join(', ')}</span>
-          </div>
-        )}
-
-        {processes.length === 0 && !error && !note && (
-          <p className="lm-empty">Camera is idle — no active processes detected.</p>
-        )}
-
-        {processes.length > 0 && (
-          <div className="lm-table-wrap" style={{ marginTop: '0.5rem' }}>
-            <table className="lm-table">
-              <thead>
-                <tr>
-                  <th>Process</th>
-                  {processes.some(p => p.device) && <th>Device</th>}
-                  {processes.some(p => p.pid) && <th>PID</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {processes.map((p, i) => (
-                  <tr key={i}>
-                    <td className="lm-site" style={{ color: '#f87171' }}>🔴 {p.process}</td>
-                    {processes.some(pr => pr.device) && <td>{p.device ? `/dev/${p.device}` : '—'}</td>}
-                    {processes.some(pr => pr.pid) && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-/** Microphone detection detail panel */
-function MicDetailPanel({ microphone }) {
-  const active = microphone?.active ?? false
-  const processes = microphone?.processes ?? []
-  const devices = microphone?.audioDevices ?? []
-  const note = microphone?.note
-  const error = microphone?.error
-
-  return (
-    <section className="info-panel lm-panel">
-      <h2 className="panel-title">
-        <span>🎤</span> Active Microphone Detection
-        <span className={`lm-status-dot ${active ? 'dot-mic-active' : 'dot-idle'}`} />
-        <span style={{ fontSize: '0.75rem', color: active ? '#fb923c' : '#64748b' }}>
-          {active ? 'IN USE' : 'IDLE'}
-        </span>
-      </h2>
-      <div className="lm-panel-body">
-        {error && <p className="lm-empty" style={{ color: '#f87171' }}>{error}</p>}
-        {note && <p className="lm-hint" style={{ padding: '0.5rem 0' }}>{note}</p>}
-
-        {devices.length > 0 && (
-          <div className="info-row">
-            <span className="info-label">Audio Devices</span>
-            <span className="info-value">{devices.map(d => `${SND_DEV_PREFIX}${d}`).join(', ')}</span>
-          </div>
-        )}
-
-        {processes.length === 0 && !error && !note && (
-          <p className="lm-empty">Microphone is idle — no active processes detected.</p>
-        )}
-
-        {processes.length > 0 && (
-          <div className="lm-table-wrap" style={{ marginTop: '0.5rem' }}>
-            <table className="lm-table">
-              <thead>
-                <tr>
-                  <th>Process</th>
-                  {processes.some(p => p.device) && <th>Device</th>}
-                  {processes.some(p => p.pid) && <th>PID</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {processes.map((p, i) => (
-                  <tr key={i}>
-                    <td className="lm-site" style={{ color: '#fb923c' }}>🟠 {p.process}</td>
-                    {processes.some(pr => pr.device) && <td>{p.device ? `${SND_DEV_PREFIX}${p.device}` : '—'}</td>}
-                    {processes.some(pr => pr.pid) && <td style={{ color: '#64748b' }}>{p.pid ?? '—'}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
-/** All running background apps panel */
 function BackgroundAppsPanel({ processes: procData }) {
   const [search, setSearch] = useState('')
 
@@ -559,18 +553,15 @@ function BackgroundAppsPanel({ processes: procData }) {
   return (
     <section className="info-panel lm-panel">
       <h2 className="panel-title"><span>📋</span> Background Apps (Running Processes)</h2>
-
       {note && (
         <div className="lm-os-note">
           <span>ℹ️</span>
           <div><p>{note}</p></div>
         </div>
       )}
-
       {error && (
         <p className="lm-empty" style={{ color: '#f87171' }}>Error: {error}</p>
       )}
-
       {!note && !error && (
         <>
           <div style={{ padding: '0.5rem 0 0.75rem' }}>
@@ -619,7 +610,6 @@ function BackgroundAppsPanel({ processes: procData }) {
   )
 }
 
-/** Scan footer with last-scan time, countdown, and refresh button */
 function ScanFooter({ lastScan, countdown, loading, onRefresh }) {
   return (
     <div className="lm-footer">
@@ -652,6 +642,10 @@ export default function LiveMonitorPage() {
   const [lastScan, setLastScan] = useState(null)
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL)
 
+  const advancedSensors = useAdvancedSensors()
+  const bgApps = useBackgroundWindowTitles()
+  const detectedBrowsers = useDetectedBrowsers()
+
   const scan = useCallback(async () => {
     setLoading(true)
     try {
@@ -667,21 +661,17 @@ export default function LiveMonitorPage() {
     }
   }, [])
 
-  // Auto-scan on mount then every REFRESH_INTERVAL seconds
   useEffect(() => {
     scan()
     const id = setInterval(scan, REFRESH_INTERVAL * 1000)
     return () => clearInterval(id)
   }, [scan])
 
-  // Countdown ticker
   useEffect(() => {
     if (loading) return
     const id = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000)
     return () => clearInterval(id)
   }, [loading])
-
-  const detectedBrowsers = useDetectedBrowsers()
 
   const browserData = {};
   if (data) {
@@ -692,7 +682,6 @@ export default function LiveMonitorPage() {
 
   return (
     <div className="lm-page">
-      {/* Top notice */}
       <div className="notice-banner">
         <span className="notice-icon">🔴</span>
         <div>
@@ -705,16 +694,17 @@ export default function LiveMonitorPage() {
         </div>
       </div>
 
-      {/* Server offline */}
       {error && !data && <ServerOffBanner error={error} />}
 
-      {/* Camera active alert */}
-      {data?.camera && <CameraAlert camera={data.camera} />}
+      {/* Multi-Sensor Attack Alert Banner */}
+      {data && (
+        <MultiSensorAttackAlert
+          cameraActive={data?.camera?.active}
+          micActive={data?.microphone?.active}
+          sensors={advancedSensors}
+        />
+      )}
 
-      {/* Microphone active alert */}
-      {data?.microphone && <MicAlert microphone={data.microphone} />}
-
-      {/* Loading skeleton */}
       {loading && !data && (
         <div className="lm-loading">
           <div className="lm-spinner" />
@@ -722,28 +712,26 @@ export default function LiveMonitorPage() {
         </div>
       )}
 
-      {/* Device Status Summary — shown as soon as first scan completes */}
+      {/* Primary Sensor Status Panel (Replacing DeviceStatusSummary) */}
       {data && (
-        <DeviceStatusSummary
+        <SensorStatusPanel
           camera={data.camera}
           microphone={data.microphone}
           browserData={browserData}
-          scanTime={lastScan}
+          bgApps={bgApps}
+          advancedSensors={advancedSensors}
         />
       )}
 
-      {/* Main content */}
+      {/* Main content grid */}
       {data && (
         <div className="lm-grid">
           <BrowserPanel browserData={browserData} detectedBrowsers={detectedBrowsers} />
           <OSAppsPanel os={data.os} />
-          <CameraDetailPanel camera={data.camera} />
-          <MicDetailPanel microphone={data.microphone} />
           <BackgroundAppsPanel processes={data.processes} />
         </div>
       )}
 
-      {/* Footer */}
       {(data || loading) && (
         <ScanFooter
           lastScan={lastScan}

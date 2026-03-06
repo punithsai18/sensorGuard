@@ -1,14 +1,26 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 // The tracking backend runs on port 8998
 export default function ScreenTimePage() {
     const [screenTimeData, setScreenTimeData] = useState([]);
     const [lastUpdated, setLastUpdated] = useState(null);
     const [connected, setConnected] = useState(false);
-    const [view, setView] = useState('daily');
 
     const [bgApps, setBgApps] = useState([]);
     const [bgConnected, setBgConnected] = useState(false);
+
+    const [showAllDomainsFor, setShowAllDomainsFor] = useState({});
+    const [showAllProcesses, setShowAllProcesses] = useState(false);
+
+    // Provide deterministic colors based on app name
+    const stringToColor = (str) => {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const h = Math.abs(hash) % 360;
+        return `hsl(${h}, 70%, 60%)`;
+    };
 
     // Connection to Screen Time Tracker (Port 8998)
     useEffect(() => {
@@ -42,19 +54,14 @@ export default function ScreenTimePage() {
                 backoff = Math.min(backoff * 2, 30000);
             };
 
-            ws.onerror = () => {
-                ws.close();
-            };
+            ws.onerror = () => ws.close();
         }
 
         connect();
 
         return () => {
             clearTimeout(reconnectTimeout);
-            if (ws) {
-                ws.onclose = null;
-                ws.close();
-            }
+            if (ws) { ws.onclose = null; ws.close(); }
         };
     }, []);
 
@@ -67,20 +74,13 @@ export default function ScreenTimePage() {
         function connect() {
             ws = new WebSocket('ws://127.0.0.1:8997');
 
-            ws.onopen = () => {
-                setBgConnected(true);
-                backoff = 1000;
-            };
+            ws.onopen = () => { setBgConnected(true); backoff = 1000; };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    if (data.event === 'background_apps') {
-                        setBgApps(data.apps || []);
-                    }
-                } catch (e) {
-                    console.error('[BgApps] Error:', e);
-                }
+                    if (data.event === 'background_apps') setBgApps(data.apps || []);
+                } catch (e) { }
             };
 
             ws.onclose = () => {
@@ -96,10 +96,7 @@ export default function ScreenTimePage() {
 
         return () => {
             clearTimeout(reconnectTimeout);
-            if (ws) {
-                ws.onclose = null;
-                ws.close();
-            }
+            if (ws) { ws.onclose = null; ws.close(); }
         };
     }, []);
 
@@ -133,9 +130,14 @@ export default function ScreenTimePage() {
 
     const sortedApps = Object.entries(topAppsMap).sort((a, b) => b[1] - a[1]);
 
+    const displayedApps = showAllProcesses ? sortedApps : sortedApps.slice(0, 5);
+
+    const toggleDomains = (appName) => {
+        setShowAllDomainsFor(prev => ({ ...prev, [appName]: !prev[appName] }));
+    };
+
     return (
         <div className="st-page">
-            {/* Glassmorphism Header */}
             <div className="st-hero">
                 <div className="st-hero-content">
                     <div className="st-hero-main">
@@ -145,7 +147,7 @@ export default function ScreenTimePage() {
                                 <circle
                                     className="st-circle-progress"
                                     cx="50" cy="50" r="45"
-                                    style={{ strokeDasharray: `283`, strokeDashoffset: `283` }} // Placeholder animation
+                                    style={{ strokeDasharray: `283`, strokeDashoffset: `283` }}
                                 />
                             </svg>
                             <div className="st-circle-text">
@@ -176,7 +178,7 @@ export default function ScreenTimePage() {
                                     <span className="st-stat-icon">🌍</span>
                                     <div className="st-stat-details">
                                         <span className="st-stat-label">Websites</span>
-                                        <span className="st-stat-value">{Object.keys(webActivityMap).length} active</span>
+                                        <span className="st-stat-value">{Object.keys(webActivityMap).length} active browsers</span>
                                     </div>
                                 </div>
                             </div>
@@ -198,26 +200,39 @@ export default function ScreenTimePage() {
                 {/* Visual Chart Card */}
                 <div className="st-card st-chart-card">
                     <div className="st-card-header">
-                        <h3><span>📊</span> Activity Timeline</h3>
-                        <div className="st-view-toggle">
-                            <button className={view === 'daily' ? 'active' : ''} onClick={() => setView('daily')}>Day</button>
-                            <button className={view === 'weekly' ? 'active' : ''} onClick={() => setView('weekly')}>Week</button>
-                        </div>
+                        <h3><span>📊</span> Activity Distribution</h3>
                     </div>
-                    <div className="st-chart-wrapper">
-                        <div className="st-bar-chart">
-                            {Array.from({ length: 24 }).map((_, i) => {
-                                const h = Math.random() * 70 + 5;
-                                return (
-                                    <div key={i} className="st-bar-group">
-                                        <div className="st-bar-active" style={{ height: `${h}%` }}>
-                                            <div className="st-bar-tooltip">{i}:00 - {Math.round(h)}m</div>
+                    <div className="st-chart-wrapper" style={{ display: 'flex', flexDirection: 'column', padding: '1rem', minHeight: '150px' }}>
+                        {totalSeconds === 0 ? (
+                            <div className="st-empty-state" style={{ margin: 'auto' }}>
+                                <p>No data recorded yet.</p>
+                            </div>
+                        ) : (
+                            <>
+                                <div style={{ display: 'flex', width: '100%', height: '40px', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#334155' }}>
+                                    {sortedApps.map(([appName, time]) => {
+                                        const percent = (time / totalSeconds) * 100;
+                                        if (percent < 0.5) return null; // Too small to render cleanly
+                                        return (
+                                            <div
+                                                key={appName}
+                                                style={{ width: `${percent}%`, height: '100%', backgroundColor: stringToColor(appName), borderRight: '1px solid rgba(0,0,0,0.2)', position: 'relative' }}
+                                                title={`${appName}: ${formatTime(time)} (${percent.toFixed(1)}%)`}
+                                            />
+                                        );
+                                    })}
+                                </div>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
+                                    {sortedApps.slice(0, 8).map(([appName, time]) => (
+                                        <div key={appName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: stringToColor(appName) }}></div>
+                                            <span style={{ color: '#e2e8f0' }}>{appName}</span>
+                                            <span style={{ color: '#94a3b8' }}>{Math.round((time / totalSeconds) * 100)}%</span>
                                         </div>
-                                        <span className="st-bar-label">{i % 6 === 0 ? `${i}h` : ''}</span>
-                                    </div>
-                                );
-                            })}
-                        </div>
+                                    ))}
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
 
@@ -225,7 +240,13 @@ export default function ScreenTimePage() {
                 <div className="st-card st-apps-card">
                     <div className="st-card-header">
                         <h3><span>🚀</span> Most Used Applications</h3>
-                        <span className="st-card-subtitle">{sortedApps.length} processes detected</span>
+                        <button
+                            onClick={() => setShowAllProcesses(!showAllProcesses)}
+                            className="st-card-subtitle"
+                            style={{ background: 'transparent', border: '1px solid #475569', borderRadius: '4px', color: '#94a3b8', padding: '0.2rem 0.5rem', cursor: 'pointer' }}
+                        >
+                            {showAllProcesses ? 'Show top 5 only' : `${sortedApps.length} processes detected`}
+                        </button>
                     </div>
 
                     <div className="st-app-rows">
@@ -235,7 +256,7 @@ export default function ScreenTimePage() {
                                 <p>No activity detected yet. Start using apps to see magic!</p>
                             </div>
                         )}
-                        {sortedApps.map(([appName, time]) => {
+                        {displayedApps.map(([appName, time]) => {
                             let icon = '📱';
                             if (appName.includes('Chrome')) icon = '🟡';
                             else if (appName.includes('Edge')) icon = '🔵';
@@ -245,6 +266,8 @@ export default function ScreenTimePage() {
                             else if (appName.includes('Terminal') || appName.includes('cmd') || appName.includes('PowerShell')) icon = '🐚';
 
                             const percent = Math.min(((time / totalSeconds) * 100).toFixed(1), 100);
+                            const domains = webActivityMap[appName]?.sort((a, b) => b.time - a.time) || [];
+                            const isExpanded = showAllDomainsFor[appName];
 
                             return (
                                 <div key={appName} className="st-app-item">
@@ -262,20 +285,27 @@ export default function ScreenTimePage() {
                                     </div>
 
                                     <div className="st-progress-container">
-                                        <div className="st-progress-bar" style={{ width: `${percent}%` }}></div>
+                                        <div className="st-progress-bar" style={{ width: `${percent}%`, backgroundColor: stringToColor(appName) }}></div>
                                     </div>
 
                                     {/* Web breakdown if applicable */}
-                                    {webActivityMap[appName] && webActivityMap[appName].length > 0 && (
+                                    {domains.length > 0 && (
                                         <div className="st-web-breakdown">
-                                            {webActivityMap[appName].sort((a, b) => b.time - a.time).slice(0, 3).map(siteRow => (
+                                            {(isExpanded ? domains : domains.slice(0, 3)).map(siteRow => (
                                                 <div key={siteRow.site} className="st-site-tag">
-                                                    <span className="st-site-name">🌐 {siteRow.site}</span>
+                                                    <img src={`https://www.google.com/s2/favicons?domain=${siteRow.site.split('/')[0]}&sz=32`} style={{ width: 14, height: 14, marginRight: 4, verticalAlign: 'middle', borderRadius: '2px' }} alt="" />
+                                                    <span className="st-site-name">{siteRow.site}</span>
                                                     <span className="st-site-time">{formatTime(siteRow.time)}</span>
                                                 </div>
                                             ))}
-                                            {webActivityMap[appName].length > 3 && (
-                                                <span className="st-more-sites">+{webActivityMap[appName].length - 3} more domains</span>
+                                            {domains.length > 3 && (
+                                                <button
+                                                    onClick={() => toggleDomains(appName)}
+                                                    className="st-more-sites"
+                                                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '4px' }}
+                                                >
+                                                    {isExpanded ? 'Show less' : `+${domains.length - 3} more domains`}
+                                                </button>
                                             )}
                                         </div>
                                     )}
@@ -345,5 +375,4 @@ export default function ScreenTimePage() {
             </footer>
         </div>
     );
-
 }
