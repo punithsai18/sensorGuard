@@ -12,14 +12,29 @@ export default function ScreenTimePage() {
     const [showAllDomainsFor, setShowAllDomainsFor] = useState({});
     const [showAllProcesses, setShowAllProcesses] = useState(false);
 
-    // Provide deterministic colors based on app name
+    const [dailyGoalMinutes, setDailyGoalMinutes] = useState(120); // 2 hours default
+    const [isEditingGoal, setIsEditingGoal] = useState(false);
+
+    const exportToCSV = () => {
+        const headers = ["Application", "Time Used (seconds)", "Last Seen"];
+        const rows = screenTimeData.map(row => `${row.app},${row.time},${row.last_seen || ''}`);
+        const csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.join("\n");
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `screentime_${new Date().toISOString().split('T')[0]}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
     const stringToColor = (str) => {
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
             hash = str.charCodeAt(i) + ((hash << 5) - hash);
         }
-        const h = Math.abs(hash) % 360;
-        return `hsl(${h}, 70%, 60%)`;
+        const l = 20 + (Math.abs(hash) % 50);
+        return `hsl(0, 0%, ${l}%)`;
     };
 
     // Connection to Screen Time Tracker (Port 8998)
@@ -141,43 +156,70 @@ export default function ScreenTimePage() {
             <div className="st-hero">
                 <div className="st-hero-content">
                     <div className="st-hero-main">
-                        <div className="st-total-circle">
+                        <div className="st-total-circle" style={{ borderColor: totalSeconds > dailyGoalMinutes * 60 ? '#ffffff' : '' }}>
                             <svg viewBox="0 0 100 100">
                                 <circle className="st-circle-bg" cx="50" cy="50" r="45" />
                                 <circle
                                     className="st-circle-progress"
                                     cx="50" cy="50" r="45"
-                                    style={{ strokeDasharray: `283`, strokeDashoffset: `283` }}
+                                    style={{
+                                        strokeDasharray: `283`,
+                                        strokeDashoffset: Math.max(0, 283 - (283 * Math.min(1, totalSeconds / (dailyGoalMinutes * 60 || 1)))),
+                                        stroke: totalSeconds > dailyGoalMinutes * 60 ? '#ffffff' : '#64748b'
+                                    }}
                                 />
                             </svg>
                             <div className="st-circle-text">
-                                <h2>{formatTime(totalSeconds)}</h2>
+                                <h2 style={{ color: totalSeconds > dailyGoalMinutes * 60 ? '#ffffff' : '' }}>{formatTime(totalSeconds)}</h2>
                                 <p>Today</p>
                             </div>
                         </div>
                         <div className="st-hero-info">
-                            <div className="st-status-badge-wrap">
+                            <div className="st-status-badge-wrap" style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
                                 {connected ? (
-                                    <span className="st-live-tag">● Live Monitoring</span>
+                                    <span className="st-live-tag" style={{ background: 'rgba(255, 255, 255, 0.1)', color: '#ffffff', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}>● Live Monitoring</span>
                                 ) : (
-                                    <span className="st-reconnecting-tag">⚠ Reconnecting...</span>
+                                    <span className="st-reconnecting-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}>⚠ Reconnecting...</span>
                                 )}
+                                <button onClick={exportToCSV} style={{ padding: '4px 10px', fontSize: '12px' }}>Export to CSV</button>
                             </div>
                             <h1>Screen Activity</h1>
-                            <p className="st-subtitle">Visualizing your digital footprint in real-time.</p>
 
-                            <div className="st-quick-stats">
-                                <div className="st-stat-card">
-                                    <span className="st-stat-icon">🔥</span>
+                            {totalSeconds > dailyGoalMinutes * 60 ? (
+                                <p className="st-subtitle" style={{ color: '#ffffff', fontWeight: 'bold' }}>⚠️ You have exceeded your daily screen time goal!</p>
+                            ) : (
+                                <p className="st-subtitle">Visualizing your digital footprint in real-time.</p>
+                            )}
+
+                            <div className="st-quick-stats" style={{ display: 'flex', gap: '1rem', marginTop: '1rem', flexWrap: 'wrap' }}>
+                                <div className="st-stat-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '8px' }}>
                                     <div className="st-stat-details">
-                                        <span className="st-stat-label">Top App</span>
+                                        <span className="st-stat-label" style={{ fontSize: '12px', color: '#94a3b8' }}>Top App</span>
                                         <span className="st-stat-value">{sortedApps[0]?.[0] || '—'}</span>
                                     </div>
                                 </div>
-                                <div className="st-stat-card">
-                                    <span className="st-stat-icon">🌍</span>
+                                <div className="st-stat-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '8px' }}>
                                     <div className="st-stat-details">
-                                        <span className="st-stat-label">Websites</span>
+                                        <span className="st-stat-label" style={{ fontSize: '12px', color: '#94a3b8' }}>Daily Goal</span>
+                                        {isEditingGoal ? (
+                                            <input
+                                                type="number"
+                                                value={dailyGoalMinutes}
+                                                onChange={(e) => setDailyGoalMinutes(Number(e.target.value))}
+                                                onBlur={() => setIsEditingGoal(false)}
+                                                autoFocus
+                                                style={{ background: 'transparent', color: 'white', border: '1px solid #ffffff', width: '60px' }}
+                                            />
+                                        ) : (
+                                            <span className="st-stat-value" onClick={() => setIsEditingGoal(true)} style={{ cursor: 'pointer', borderBottom: '1px dashed #64748b' }}>
+                                                {Math.floor(dailyGoalMinutes / 60)}h {dailyGoalMinutes % 60}m
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div className="st-stat-card" style={{ background: 'rgba(0,0,0,0.2)', padding: '0.5rem 1rem', borderRadius: '8px' }}>
+                                    <div className="st-stat-details">
+                                        <span className="st-stat-label" style={{ fontSize: '12px', color: '#94a3b8' }}>Websites</span>
                                         <span className="st-stat-value">{Object.keys(webActivityMap).length} active browsers</span>
                                     </div>
                                 </div>

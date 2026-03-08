@@ -37,6 +37,15 @@ def init_db():
             PRIMARY KEY (date, app_name)
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS timeline_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            event_type TEXT,
+            event_source TEXT,
+            event_detail TEXT
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -173,7 +182,31 @@ def get_website_from_title(app_name, title):
             return site
     return None
 
+screen_time_buffer = {}
+last_db_write = time.time()
+
+def flush_screen_time_buffer():
+    if not screen_time_buffer:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        for (date, app_name), data in list(screen_time_buffer.items()):
+            cursor.execute("""
+                INSERT INTO screen_time_sessions (date, app_name, total_seconds, last_seen)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(date, app_name) DO UPDATE SET 
+                    total_seconds = total_seconds + ?,
+                    last_seen = ?
+            """, (date, app_name, data["seconds"], data["last_seen"], data["seconds"], data["last_seen"]))
+        conn.commit()
+        conn.close()
+        screen_time_buffer.clear()
+    except Exception as e:
+        logger.error(f"Error storing screen time: {e}")
+
 async def screen_time_loop():
+    global last_db_write
     while True:
         await asyncio.sleep(1)
         idle_time = get_idle_time_windows() if IS_WINDOWS else 0
@@ -195,20 +228,23 @@ async def screen_time_loop():
         today = datetime.now().strftime("%Y-%m-%d")
         now_str = datetime.now().isoformat()
         
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("""
-            INSERT INTO screen_time_sessions (date, app_name, total_seconds, last_seen)
-            VALUES (?, ?, 1, ?)
-            ON CONFLICT(date, app_name) DO UPDATE SET 
-                total_seconds = total_seconds + 1,
-                last_seen = ?
-        """, (today, record_name, now_str, now_str))
-        conn.commit()
-        conn.close()
+        key = (today, record_name)
+        if key not in screen_time_buffer:
+            screen_time_buffer[key] = {"seconds": 0, "last_seen": now_str}
+            
+        screen_time_buffer[key]["seconds"] += 1
+        screen_time_buffer[key]["last_seen"] = now_str
+        
+        # Write to database periodically
+        if time.time() - last_db_write >= 15:
+            flush_screen_time_buffer()
+            last_db_write = time.time()
 
 async def push_screen_time():
     while True:
         await asyncio.sleep(60)
+        flush_screen_time_buffer() # Ensure latest data is written before read
+        
         conn = sqlite3.connect(DB_PATH)
         today = datetime.now().strftime("%Y-%m-%d")
         rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
@@ -228,6 +264,7 @@ async def register(websocket):
     clients.add(websocket)
     try:
         # Push initial screen time
+        flush_screen_time_buffer()
         conn = sqlite3.connect(DB_PATH)
         today = datetime.now().strftime("%Y-%m-%d")
         rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()

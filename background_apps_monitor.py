@@ -99,8 +99,12 @@ async def broadcast_apps_loop():
         if not clients:
             continue
             
-        apps = get_running_apps()
-        msg = json.dumps({"event": "background_apps", "apps": apps})
+        try:
+            apps = get_running_apps()
+            msg = json.dumps({"event": "background_apps", "apps": apps})
+        except Exception as e:
+            logger.error(f"Error getting background apps: {e}")
+            continue
         
         for ws in list(clients):
             try:

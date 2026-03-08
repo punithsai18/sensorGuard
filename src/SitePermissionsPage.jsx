@@ -15,17 +15,17 @@ const PERM_ICON = {
 }
 
 const PERM_COLOR = {
-  camera: '#f87171',
-  microphone: '#fb923c',
-  geolocation: '#facc15',
-  notifications: '#34d399',
-  'display-capture': '#60a5fa',
-  'clipboard-read': '#a78bfa',
-  'clipboard-write': '#c084fc',
-  'storage-access': '#22d3ee',
+  camera: '#ffffff',
+  microphone: '#e2e8f0',
+  geolocation: '#cbd5e1',
+  notifications: '#94a3b8',
+  'display-capture': '#64748b',
+  'clipboard-read': '#475569',
+  'clipboard-write': '#334155',
+  'storage-access': '#1e293b',
 }
 
-const STATUS_COLOR = { allowed: '#4ade80', blocked: '#f87171', ask: '#fbbf24' }
+const STATUS_COLOR = { allowed: '#ffffff', blocked: '#4b5563', ask: '#9ca3af' }
 const STATUS_ICON = { allowed: '✅', blocked: '🚫', ask: '❓' }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -484,7 +484,7 @@ export default function SitePermissionsPage() {
             )}
             {!loading && (
               <span className="lm-live">
-                {live ? <span style={{ color: '#4ade80' }}>● Live</span> : <span style={{ color: '#fbbf24' }}>Reconnecting...</span>}
+                {live ? <span style={{ color: '#ffffff' }}>● Live</span> : <span style={{ color: '#94a3b8' }}>Reconnecting...</span>}
               </span>
             )}
             <button

@@ -8,6 +8,11 @@ from websockets.http11 import Response
 from websockets.datastructures import Headers
 
 try:
+    from timeline_logger import log_event
+except ImportError:
+    def log_event(*args): pass
+
+try:
     import ctypes
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
@@ -149,13 +154,21 @@ def gather_sensors():
 
 async def broadcast_loop():
     # Cache the accessed states so they don't immediately disappear
-    cached = gather_sensors()
+    try:
+        cached = gather_sensors()
+    except Exception as e:
+        logger.error(f"Initial gather_sensors failed: {e}")
+        cached = {k: {"status": "IDLE", "info": "—"} for k in ["location", "clipboard", "screen_capture", "keyboard", "network", "usb"]}
     
     while True:
         await asyncio.sleep(2)
         if not clients: continue
         
-        current = gather_sensors()
+        try:
+            current = gather_sensors()
+        except Exception as e:
+            logger.error(f"Error gathering sensors: {e}")
+            continue
         
         # Merge logic for volatile states like clipboard accessed so it flashes for a few seconds
         for k in ["clipboard", "keyboard"]:
@@ -168,9 +181,19 @@ async def broadcast_loop():
                         cached[k] = {"status": "IDLE", "info": "—"}
                 else:
                     cached[k] = {"status": "IDLE", "info": "—"}
-        
         # update the rest directly
         for k in ["location", "screen_capture", "network", "usb"]:
+            
+            # Special check for USB plugin/plugout events
+            if k == "usb":
+                old_status = cached.get("usb", {}).get("status", "IDLE")
+                new_status = current.get("usb", {}).get("status", "IDLE")
+                old_info = cached.get("usb", {}).get("info", "")
+                new_info = current.get("usb", {}).get("info", "")
+                
+                if old_status != new_status or old_info != new_info:
+                    log_event("HARDWARE", "USB", f"{new_status}: {new_info}")
+
             cached[k] = current[k]
                 
         msg = json.dumps({"event": "sensors_update", "sensors": cached})

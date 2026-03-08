@@ -139,10 +139,16 @@ def query_history(browser_name, db_path):
         raise e
     finally:
         if conn:
-            conn.close()
-        if tmp and os.path.exists(tmp):
-            try: os.remove(tmp)
+            try: conn.close()
             except: pass
+        if tmp and os.path.exists(tmp):
+            for _ in range(3):
+                try: 
+                    os.remove(tmp)
+                    break
+                except: 
+                    import time
+                    time.sleep(0.1)
 
 class HistoryFileHandler(FileSystemEventHandler):
     def __init__(self, browser_name, file_path, loop, publish_callback):

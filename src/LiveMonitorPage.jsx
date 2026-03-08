@@ -3,7 +3,7 @@ import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const REFRESH_INTERVAL = 15 // seconds between auto-scans
+const REFRESH_INTERVAL = 3 // seconds between auto-scans
 
 const PERM_TABS = ['camera', 'microphone', 'geolocation', 'notifications']
 const PERM_ICON = {
@@ -11,7 +11,7 @@ const PERM_ICON = {
   'clipboard-read': '📋', 'clipboard-write': '📋',
 }
 
-const STATUS_COLOR = { allowed: '#4ade80', blocked: '#f87171', ask: '#fbbf24' }
+const STATUS_COLOR = { allowed: '#ffffff', blocked: '#4b5563', ask: '#9ca3af' }
 const STATUS_ICON = { allowed: '✅', blocked: '🚫', ask: '❓' }
 
 const SND_DEV_PREFIX = '/dev/snd/'
@@ -104,11 +104,21 @@ function getProcessDetails(procExe, bgApps, browserData) {
   if (windowApp && windowApp.title) {
     activeTitle = windowApp.title;
     if (known && known.isBrowser) {
-      // Extract domain from title (e.g. "Meet - abc - Google Chrome")
-      const parts = activeTitle.rsplit ? activeTitle.rsplit(' - ', 1) : activeTitle.split(' - ');
+      // Extract domain from title (e.g., "Meet - abc - Google Chrome" -> "Meet - abc")
+      const parts = activeTitle.split(' - ');
       if (parts.length > 1) {
-        let possibleDomain = parts[0];
-        possibleDomain = possibleDomain.replace(/^\(\d+\)\s*/, '');
+        // Find the index of the browser name and take everything before it
+        const browserIdx = parts.findIndex(p => p.toLowerCase() === known.name.toLowerCase() || p.toLowerCase().includes(known.name.toLowerCase()));
+
+        let possibleDomain = '';
+        if (browserIdx > 0) {
+          possibleDomain = parts.slice(0, browserIdx).join(' - ');
+        } else {
+          possibleDomain = parts[0];
+        }
+
+        // Remove notification counts like "(1) " or "(99+) "
+        possibleDomain = possibleDomain.replace(/^\(\d+\+?\)\s*/, '');
         activeDomain = possibleDomain;
       }
     }
@@ -168,10 +178,10 @@ function MultiSensorAttackAlert({ cameraActive, micActive, sensors }) {
   if (!isAttack) return null;
 
   return (
-    <div className="lm-alert" style={{ background: '#fef2f2', borderColor: '#f87171', color: '#991b1b', marginBottom: '1rem' }}>
+    <div className="lm-alert" style={{ background: '#111111', borderColor: '#ffffff', color: '#ffffff', marginBottom: '1rem' }}>
       <span className="lm-alert-icon">🚨</span>
       <div>
-        <strong style={{ fontSize: '1.2rem', color: '#b91c1c' }}>MULTI-SENSOR ATTACK ALERT</strong>
+        <strong style={{ fontSize: '1.2rem', color: '#ffffff' }}>MULTI-SENSOR ATTACK ALERT</strong>
         <p style={{ marginTop: '0.25rem', opacity: 0.9 }}>
           Camera/Microphone is actively running while an unknown process simultaneously accessed the Clipboard or installed a Global Keyboard Hook.
         </p>
@@ -181,24 +191,58 @@ function MultiSensorAttackAlert({ cameraActive, micActive, sensors }) {
 }
 
 function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors }) {
+  const [killingProc, setKillingProc] = useState(null);
+
   const camActive = camera?.active ?? false
   const micActive = microphone?.active ?? false
 
   const camProcs = (camera?.processes ?? []).map(p => p.process).filter(Boolean);
   const micProcs = (microphone?.processes ?? []).map(p => p.process).filter(Boolean);
 
+  const handleKill = async (pid, name) => {
+    if (!pid || !window.confirm(`Are you sure you want to force-quit ${name} (PID: ${pid})?`)) return;
+    setKillingProc(pid);
+    try {
+      const res = await fetch('/api/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid })
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Failed to kill process: ${err.error}`);
+      }
+    } catch (e) {
+      alert(`Error: ${e.message}`);
+    } finally {
+      setTimeout(() => setKillingProc(null), 1000);
+    }
+  };
+
   const renderCamMicDetail = (procs) => {
-    if (procs.length === 0) return { process: '—', info: '' };
+    if (procs.length === 0) return { process: '—', info: '', pid: null };
     const det = getProcessDetails(procs[0], bgApps, browserData);
+
+    // Find the actual PID from background apps if it exists
+    let pid = null;
+    const bgMatch = bgApps.find(a =>
+      a.app.toLowerCase().includes(procs[0].toLowerCase().replace('.exe', ''))
+    );
+    if (bgMatch) pid = bgMatch.pid;
+
     if (det.isBrowser) {
       return {
         process: `${det.displayName} → ${det.activeDomain || 'Unknown'}`,
-        info: det.activeTitle ? `Tab: "${det.activeTitle}"` : ''
+        info: det.activeTitle ? `Tab: "${det.activeTitle}"` : '',
+        pid,
+        displayName: det.displayName
       };
     } else {
       return {
         process: `${det.displayName} (${det.exe})`,
-        info: det.activeTitle ? `Window: "${det.activeTitle}"` : ''
+        info: det.activeTitle ? `Window: "${det.activeTitle}"` : '',
+        pid,
+        displayName: det.displayName
       };
     }
   };
@@ -215,11 +259,11 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
 
   return (
     <section className="info-panel lm-panel" style={{ marginBottom: '1rem' }}>
-      <h2 className="panel-title" style={{ borderBottom: '1px solid #334155' }}><span>🛡️</span> SENSOR STATUS PANEL</h2>
+      <h2 className="panel-title" style={{ borderBottom: '1px solid #333333' }}><span>🛡️</span> SENSOR STATUS PANEL</h2>
       <div className="ds-table-wrap" style={{ marginTop: '0' }}>
         <table className="ds-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
-            <tr style={{ textAlign: 'left', background: '#1e293b', borderBottom: '2px solid #334155' }}>
+            <tr style={{ textAlign: 'left', background: '#111111', borderBottom: '2px solid #333333' }}>
               <th style={{ padding: '0.75rem' }}>SENSOR</th>
               <th style={{ padding: '0.75rem' }}>STATUS</th>
               <th style={{ padding: '0.75rem' }}>PROCESS DETAIL</th>
@@ -228,10 +272,10 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
           </thead>
           <tbody>
             {/* Camera */}
-            <tr style={{ borderBottom: '1px solid #334155', background: camActive ? 'rgba(74, 222, 128, 0.05)' : '' }}>
+            <tr style={{ borderBottom: '1px solid #333333', background: camActive ? 'rgba(255, 255, 255, 0.05)' : '' }}>
               <td style={{ padding: '0.75rem' }}>📷 Camera</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: camActive ? '#4ade80' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: camActive ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {camActive ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
@@ -241,14 +285,22 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem' }}>
                 <span style={{ color: camActive ? '#4ade80' : '#64748b' }}>{camActive ? 'NORMAL' : '—'}</span>
+                {camActive && camDet.pid && (
+                  <button
+                    disabled={killingProc === camDet.pid}
+                    onClick={() => handleKill(camDet.pid, camDet.displayName)}
+                    style={{ marginLeft: '1rem', background: 'rgba(239, 68, 68, 0.2)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.4)', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer' }}>
+                    {killingProc === camDet.pid ? 'Killing...' : '🛑 KILL'}
+                  </button>
+                )}
               </td>
             </tr>
 
             {/* Microphone */}
-            <tr style={{ borderBottom: '1px solid #334155', background: micActive ? 'rgba(251, 146, 60, 0.05)' : '' }}>
+            <tr style={{ borderBottom: '1px solid #333333', background: micActive ? 'rgba(255, 255, 255, 0.05)' : '' }}>
               <td style={{ padding: '0.75rem' }}>🎙 Microphone</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: micActive ? '#fb923c' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: micActive ? '#e2e8f0' : '#64748b', fontWeight: 'bold' }}>
                   {micActive ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
@@ -258,6 +310,14 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem' }}>
                 <span style={{ color: micActive ? '#4ade80' : '#64748b' }}>{micActive ? 'NORMAL' : '—'}</span>
+                {micActive && micDet.pid && (
+                  <button
+                    disabled={killingProc === micDet.pid}
+                    onClick={() => handleKill(micDet.pid, micDet.displayName)}
+                    style={{ marginLeft: '1rem', background: 'rgba(239, 68, 68, 0.2)', color: '#fca5a5', border: '1px solid rgba(239, 68, 68, 0.4)', padding: '0.2rem 0.5rem', borderRadius: '4px', fontSize: '0.75rem', cursor: 'pointer' }}>
+                    {killingProc === micDet.pid ? 'Killing...' : '🛑 KILL'}
+                  </button>
+                )}
               </td>
             </tr>
 
@@ -278,64 +338,63 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
             </tr>
 
             {/* Clipboard */}
-            <tr style={{ borderBottom: '1px solid #334155', background: sClip.status !== 'IDLE' ? 'rgba(251, 191, 36, 0.05)' : '' }}>
+            <tr style={{ borderBottom: '1px solid #333333', background: sClip.status !== 'IDLE' ? 'rgba(255, 255, 255, 0.05)' : '' }}>
               <td style={{ padding: '0.75rem' }}>📋 Clipboard</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sClip.status !== 'IDLE' ? '#fbbf24' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sClip.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sClip.status !== 'IDLE' ? '⚠ ACCESSED' : '○ IDLE'}
                 </span>
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sClip.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sClip.status !== 'IDLE' ? '#fbbf24' : '#64748b' }}>
+                <span style={{ color: sClip.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sClip.status !== 'IDLE' ? 'HIGH' : '—'}
                 </span>
               </td>
             </tr>
 
             {/* Screen Capture */}
-            <tr style={{ borderBottom: '1px solid #334155' }}>
+            <tr style={{ borderBottom: '1px solid #333333' }}>
               <td style={{ padding: '0.75rem' }}>🖥 Screen Cap</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sScreen.status !== 'IDLE' ? '#fbbf24' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sScreen.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sScreen.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sScreen.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sScreen.status !== 'IDLE' ? '#fbbf24' : '#64748b' }}>
+                <span style={{ color: sScreen.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sScreen.status !== 'IDLE' ? 'HIGH' : '—'}
                 </span>
               </td>
             </tr>
 
             {/* Keyboard Hook */}
-            <tr style={{ borderBottom: '1px solid #334155', background: sKey.status !== 'IDLE' ? 'rgba(248, 113, 113, 0.05)' : '' }}>
+            <tr style={{ borderBottom: '1px solid #333333', background: sKey.status !== 'IDLE' ? 'rgba(255, 255, 255, 0.1)' : '' }}>
               <td style={{ padding: '0.75rem' }}>⌨ Keyboard Hook</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sKey.status !== 'IDLE' ? '#f87171' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sKey.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sKey.status !== 'IDLE' ? '🚨 DETECTED' : '○ IDLE'}
                 </span>
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sKey.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sKey.status !== 'IDLE' ? '#f87171' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sKey.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sKey.status !== 'IDLE' ? 'CRITICAL' : '—'}
                 </span>
               </td>
             </tr>
 
-            {/* Network */}
-            <tr style={{ borderBottom: '1px solid #334155' }}>
+            <tr style={{ borderBottom: '1px solid #333333' }}>
               <td style={{ padding: '0.75rem' }}>🌐 Network</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sNet.status !== 'IDLE' ? '#4ade80' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sNet.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sNet.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sNet.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sNet.status !== 'IDLE' ? '#4ade80' : '#64748b' }}>
+                <span style={{ color: sNet.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sNet.status !== 'IDLE' ? 'NORMAL' : '—'}
                 </span>
               </td>
@@ -345,13 +404,13 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
             <tr style={{ borderBottom: 'none' }}>
               <td style={{ padding: '0.75rem' }}>🔌 USB</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sUsb.status !== 'IDLE' ? '#60a5fa' : '#64748b', fontWeight: 'bold' }}>
+                <span style={{ color: sUsb.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sUsb.status !== 'IDLE' ? '● ACTIVE' : '○ IDLE'}
                 </span>
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sUsb.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sUsb.status !== 'IDLE' ? '#60a5fa' : '#64748b' }}>
+                <span style={{ color: sUsb.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sUsb.status !== 'IDLE' ? 'LOW' : '—'}
                 </span>
               </td>
@@ -610,7 +669,7 @@ function BackgroundAppsPanel({ processes: procData }) {
   )
 }
 
-function ScanFooter({ lastScan, countdown, loading, onRefresh }) {
+function ScanFooter({ lastScan, countdown, loading, onRefresh, onExport }) {
   return (
     <div className="lm-footer">
       <div className="lm-footer-info">
@@ -622,13 +681,23 @@ function ScanFooter({ lastScan, countdown, loading, onRefresh }) {
         )}
         {loading && <span className="lm-scanning">⟳ Scanning…</span>}
       </div>
-      <button
-        className={`lm-refresh-btn${loading ? ' loading' : ''}`}
-        onClick={onRefresh}
-        disabled={loading}
-      >
-        {loading ? '⟳ Scanning…' : '🔄 Scan Now'}
-      </button>
+      <div style={{ display: 'flex', gap: '1rem' }}>
+        <button
+          className="lm-refresh-btn"
+          onClick={onExport}
+          disabled={loading}
+          style={{ backgroundColor: 'rgba(59, 130, 246, 0.2)' }}
+        >
+          📥 Export Report
+        </button>
+        <button
+          className={`lm-refresh-btn${loading ? ' loading' : ''}`}
+          onClick={onRefresh}
+          disabled={loading}
+        >
+          {loading ? '⟳ Scanning…' : '🔄 Scan Now'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -672,6 +741,32 @@ export default function LiveMonitorPage() {
     const id = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000)
     return () => clearInterval(id)
   }, [loading])
+
+  const exportToCSV = useCallback(() => {
+    if (!data) return;
+    const rows = [];
+    rows.push(["Topic", "Status/Count", "Detail"]);
+
+    // Quick Sensors
+    rows.push(["Camera", data.camera?.active ? "Active" : "Idle", ""]);
+    rows.push(["Microphone", data.microphone?.active ? "Active" : "Idle", ""]);
+
+    // Background processes
+    if (data.processes?.processes) {
+      data.processes.processes.forEach(p => {
+        rows.push(["Process", p.name, `PID: ${p.pid} CPU: ${p.cpu || ''}`]);
+      });
+    }
+
+    const csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `LiveSensorReport_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [data]);
 
   const browserData = {};
   if (data) {
@@ -728,7 +823,6 @@ export default function LiveMonitorPage() {
         <div className="lm-grid">
           <BrowserPanel browserData={browserData} detectedBrowsers={detectedBrowsers} />
           <OSAppsPanel os={data.os} />
-          <BackgroundAppsPanel processes={data.processes} />
         </div>
       )}
 
@@ -738,6 +832,7 @@ export default function LiveMonitorPage() {
           countdown={countdown}
           loading={loading}
           onRefresh={scan}
+          onExport={exportToCSV}
         />
       )}
     </div>

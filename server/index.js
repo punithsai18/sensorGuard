@@ -10,6 +10,7 @@
  */
 const express = require('express');
 const cors = require('cors');
+const { execSync } = require('child_process');
 
 const { parsePrefs } = require('./scanners/chrome');
 const { scanFirefox } = require('./scanners/firefox');
@@ -102,6 +103,27 @@ app.get('/api/screentime', (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// ── Timeline Events ──────────────────────────────────────────────────────────
+
+app.get('/api/timeline', (req, res) => {
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const dbPath = path.join(__dirname, '..', 'screen_time.db');
+
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return res.status(500).json({ error: 'DB not found', details: err.message });
+
+      db.all("SELECT id, timestamp, event_type, event_source, event_detail FROM timeline_events ORDER BY id DESC LIMIT 100", [], (err, rows) => {
+        db.close();
+        if (err) return res.status(500).json({ error: 'DB read error', details: err.message });
+        res.json({ events: rows });
+      });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ── Aggregate scan ────────────────────────────────────────────────────────────
 
@@ -133,6 +155,24 @@ app.get('/api/scan/all', async (_req, res) => {
   }
 
   res.json(result);
+});
+
+// ── Process Kill ──────────────────────────────────────────────────────────────
+
+app.post('/api/kill', (req, res) => {
+  const { pid } = req.body;
+  if (!pid) return res.status(400).json({ error: 'PID is required' });
+
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /F /PID ${pid}`);
+    } else {
+      execSync(`kill -9 ${pid}`);
+    }
+    res.json({ success: true, pid });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────

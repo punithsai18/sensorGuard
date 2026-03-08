@@ -4,6 +4,7 @@ import TabsPage from './TabsPage.jsx'
 import SitePermissionsPage from './SitePermissionsPage.jsx'
 import LiveMonitorPage from './LiveMonitorPage.jsx'
 import ScreenTimePage from './ScreenTimePage.jsx'
+import TimelinePage from './TimelinePage.jsx'
 
 // --- Hooks ---
 
@@ -219,7 +220,7 @@ function DataRow({ label, value, unit }) {
 }
 
 function BatteryBar({ level, charging }) {
-  const color = level > 20 ? '#4ade80' : '#f87171'
+  const color = level > 20 ? 'var(--color-primary)' : 'var(--color-text-muted)'
   return (
     <div className="battery-bar-container">
       <div className="battery-bar-outer">
@@ -244,7 +245,6 @@ function App() {
   const time = useClock()
   const [screenInfo, setScreenInfo] = useState(getScreenInfo)
   const [memInfo, setMemInfo] = useState(getMemoryInfo)
-
   useEffect(() => {
     const update = () => setScreenInfo(getScreenInfo())
     window.addEventListener('resize', update)
@@ -271,9 +271,14 @@ function App() {
               <p className="header-subtitle">Real-Time Laptop Sensor Dashboard</p>
             </div>
           </div>
-          <div className="header-time">
-            <div className="time-display">{time.toLocaleTimeString()}</div>
-            <div className="date-display">{time.toLocaleDateString()}</div>
+          <div className="header-time" style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+            <div style={{ textAlign: 'right' }}>
+              <span style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', letterSpacing: '0.1em' }}>SECURE ACCESS ONLY</span>
+            </div>
+            <div>
+              <div className="time-display">{time.toLocaleTimeString()}</div>
+              <div className="date-display">{time.toLocaleDateString()}</div>
+            </div>
           </div>
         </div>
         <nav className="app-nav">
@@ -307,6 +312,12 @@ function App() {
           >
             🕐 Screen Time
           </button>
+          <button
+            className={`nav-tab${page === 'timeline' ? ' active' : ''}`}
+            onClick={() => setPage('timeline')}
+          >
+            🕰️ Timeline
+          </button>
         </nav>
       </header>
 
@@ -318,6 +329,8 @@ function App() {
         <LiveMonitorPage />
       ) : page === 'screen-time' ? (
         <ScreenTimePage />
+      ) : page === 'timeline' ? (
+        <TimelinePage />
       ) : (
         <main className="sensor-grid">
           {/* Battery */}
@@ -461,6 +474,12 @@ function App() {
               <span className="ua-text">{navigator.userAgent}</span>
             </div>
           </SensorCard>
+        </main>
+      )}
+
+      {page === 'timeline' && (
+        <main className="app-main">
+          <TimelinePage />
         </main>
       )}
 
