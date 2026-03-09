@@ -1,39 +1,32 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const REFRESH_INTERVAL = 30 // seconds
-
-const BROWSER_LABELS = [
-  { key: 'chrome',  icon: '🟡', label: 'Chrome' },
-  { key: 'edge',    icon: '🔵', label: 'Edge' },
-  { key: 'firefox', icon: '🦊', label: 'Firefox' },
-]
-
 const PERM_ICON = {
-  camera           : '📷',
-  microphone       : '🎤',
-  geolocation      : '📍',
-  notifications    : '🔔',
+  camera: '📷',
+  microphone: '🎤',
+  geolocation: '📍',
+  notifications: '🔔',
   'display-capture': '🖥️',
-  'clipboard-read' : '📋',
+  'clipboard-read': '📋',
   'clipboard-write': '📋',
-  'storage-access' : '🔐',
+  'storage-access': '🔐',
 }
 
 const PERM_COLOR = {
-  camera           : '#f87171',
-  microphone       : '#fb923c',
-  geolocation      : '#facc15',
-  notifications    : '#34d399',
-  'display-capture': '#60a5fa',
-  'clipboard-read' : '#a78bfa',
-  'clipboard-write': '#c084fc',
-  'storage-access' : '#22d3ee',
+  camera: '#ffffff',
+  microphone: '#e2e8f0',
+  geolocation: '#cbd5e1',
+  notifications: '#94a3b8',
+  'display-capture': '#64748b',
+  'clipboard-read': '#475569',
+  'clipboard-write': '#334155',
+  'storage-access': '#1e293b',
 }
 
-const STATUS_COLOR = { allowed: '#4ade80', blocked: '#f87171', ask: '#fbbf24' }
-const STATUS_ICON  = { allowed: '✅', blocked: '🚫', ask: '❓' }
+const STATUS_COLOR = { allowed: '#ffffff', blocked: '#4b5563', ask: '#9ca3af' }
+const STATUS_ICON = { allowed: '✅', blocked: '🚫', ask: '❓' }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -48,13 +41,9 @@ function isExternalSite(site) {
   return !/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(site);
 }
 
-/**
- * Merge Chrome, Edge, and Firefox scanner results into a flat list of
- * { site, browser, permission, status } rows that can be filtered/sorted.
- */
-function buildRows(data) {
+function buildRows(data, detectedBrowsers) {
   const rows = []
-  for (const { key: browser } of BROWSER_LABELS) {
+  for (const browser of detectedBrowsers) {
     const bd = data?.[browser]
     if (!bd || bd.error) continue
     for (const [perm, entries] of Object.entries(bd)) {
@@ -70,14 +59,14 @@ function buildRows(data) {
 }
 
 const OS_PERM_LABEL = {
-  camera     : 'Camera',
-  microphone : 'Microphone',
+  camera: 'Camera',
+  microphone: 'Microphone',
   geolocation: 'Location',
 }
 
 const OS_PERM_ICON = {
-  camera     : '📷',
-  microphone : '🎤',
+  camera: '📷',
+  microphone: '🎤',
   geolocation: '📍',
 }
 
@@ -102,7 +91,7 @@ function buildOsRows(os) {
 
 function StatusBadge({ status }) {
   const color = STATUS_COLOR[status] ?? '#64748b'
-  const icon  = STATUS_ICON[status]  ?? '—'
+  const icon = STATUS_ICON[status] ?? '—'
   return (
     <span className="lm-badge" style={{ color, borderColor: color }}>
       {icon} {status}
@@ -111,8 +100,8 @@ function StatusBadge({ status }) {
 }
 
 function BrowserChip({ browser }) {
-  const b = BROWSER_LABELS.find(x => x.key === browser)
-  return b ? <span className="sp-browser-chip">{b.icon} {b.label}</span> : null
+  const meta = ALL_BROWSERS_META[browser] || { icon: '🌐', label: browser }
+  return <span className="sp-browser-chip">{meta.icon} {meta.label}</span>
 }
 
 function PermChip({ permission }) {
@@ -268,17 +257,19 @@ function DesktopAppsSection({ os }) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function SitePermissionsPage() {
-  const [data,      setData]      = useState(null)
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState(null)
-  const [lastScan,  setLastScan]  = useState(null)
-  const [countdown, setCountdown] = useState(REFRESH_INTERVAL)
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+  const [lastScan, setLastScan] = useState(null)
+  const [live, setLive] = useState(false)
+
+  const detectedBrowsers = useDetectedBrowsers()
 
   // Filters
-  const [search,         setSearch]         = useState('')
-  const [activeBrowser,  setActiveBrowser]  = useState('all')
+  const [search, setSearch] = useState('')
+  const [activeBrowser, setActiveBrowser] = useState('all')
   const [activePermFilt, setActivePermFilt] = useState('all')
-  const [activeStatus,   setActiveStatus]   = useState('all')
+  const [activeStatus, setActiveStatus] = useState('all')
 
   const scan = useCallback(async () => {
     setLoading(true)
@@ -291,25 +282,55 @@ export default function SitePermissionsPage() {
       setError(e.message)
     } finally {
       setLoading(false)
-      setCountdown(REFRESH_INTERVAL)
     }
   }, [])
 
-  // Auto-scan on mount then every REFRESH_INTERVAL seconds
+  // Auto-scan on mount
   useEffect(() => {
     scan()
-    const id = setInterval(scan, REFRESH_INTERVAL * 1000)
-    return () => clearInterval(id)
   }, [scan])
 
-  // Countdown ticker
+  // Websocket Live Connection
   useEffect(() => {
-    if (loading) return
-    const id = setInterval(() => setCountdown(c => Math.max(0, c - 1)), 1000)
-    return () => clearInterval(id)
-  }, [loading])
+    let ws
+    let reconnectTimeout
+    let backoff = 500
 
-  const allRows = useMemo(() => buildRows(data), [data])
+    function connect() {
+      ws = new WebSocket('ws://127.0.0.1:8998')
+
+      ws.onopen = () => {
+        setLive(true)
+        backoff = 500
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.event === 'permissions_changed') {
+            scan()
+          }
+        } catch (e) { }
+      }
+
+      ws.onclose = () => {
+        setLive(false)
+        reconnectTimeout = setTimeout(connect, backoff)
+        backoff = Math.min(backoff * 2, 30000)
+      }
+    }
+
+    connect()
+    return () => {
+      clearTimeout(reconnectTimeout)
+      if (ws) {
+        ws.onclose = null
+        ws.close()
+      }
+    }
+  }, [scan])
+
+  const allRows = useMemo(() => buildRows(data, detectedBrowsers), [data, detectedBrowsers])
 
   // All distinct permission types found in actual data
   const allPerms = useMemo(
@@ -322,7 +343,7 @@ export default function SitePermissionsPage() {
     return allRows.filter(r => {
       if (activeBrowser !== 'all' && r.browser !== activeBrowser) return false
       if (activePermFilt !== 'all' && r.permission !== activePermFilt) return false
-      if (activeStatus   !== 'all' && r.status !== activeStatus)       return false
+      if (activeStatus !== 'all' && r.status !== activeStatus) return false
       if (q && !r.site.toLowerCase().includes(q) && !r.permission.toLowerCase().includes(q)) return false
       return true
     })
@@ -354,13 +375,21 @@ export default function SitePermissionsPage() {
       )}
 
       {/* Browser-level errors */}
-      {data && (
+      {data && detectedBrowsers.length > 0 && (
         <div className="sp-browser-errors">
-          {BROWSER_LABELS.map(b => {
-            const bd = data[b.key]
+          {detectedBrowsers.map(key => {
+            const bd = data[key]
             if (!bd?.error) return null
+            const meta = ALL_BROWSERS_META[key] || { icon: '🌐', label: key }
+
+            let displayMsg = bd.error;
+            if (displayMsg.includes('does not exist') || displayMsg.includes('not found')) {
+              return null; // hide entirely if file hasn't been created yet
+            } else {
+              displayMsg = `Cannot read ${meta.label} preferences. Try running SensorGuard as administrator.`;
+            }
             return (
-              <BrowserError key={b.key} icon={b.icon} label={b.label} msg={bd.error} />
+              <BrowserError key={key} icon={meta.icon} label={meta.label} msg={displayMsg} />
             )
           })}
         </div>
@@ -388,13 +417,16 @@ export default function SitePermissionsPage() {
                   className={`filter-chip${activeBrowser === 'all' ? ' active' : ''}`}
                   onClick={() => setActiveBrowser('all')}
                 >All</button>
-                {BROWSER_LABELS.map(b => (
-                  <button
-                    key={b.key}
-                    className={`filter-chip${activeBrowser === b.key ? ' active' : ''}`}
-                    onClick={() => setActiveBrowser(b.key)}
-                  >{b.icon} {b.label}</button>
-                ))}
+                {detectedBrowsers.map(b => {
+                  const meta = ALL_BROWSERS_META[b] || { icon: '🌐', label: b }
+                  return (
+                    <button
+                      key={b}
+                      className={`filter-chip${activeBrowser === b ? ' active' : ''}`}
+                      onClick={() => setActiveBrowser(b)}
+                    >{meta.icon} {meta.label}</button>
+                  )
+                })}
               </div>
             </div>
 
@@ -429,8 +461,8 @@ export default function SitePermissionsPage() {
                   >
                     {s === 'all' ? 'All'
                       : s === 'allowed' ? '✅ allowed'
-                      : s === 'blocked' ? '🚫 blocked'
-                      : '❓ ask'}
+                        : s === 'blocked' ? '🚫 blocked'
+                          : '❓ ask'}
                   </button>
                 ))}
               </div>
@@ -451,8 +483,8 @@ export default function SitePermissionsPage() {
               <span>Last scan: <strong>{lastScan.toLocaleTimeString()}</strong></span>
             )}
             {!loading && (
-              <span className="lm-countdown">
-                Next in <strong>{countdown}s</strong>
+              <span className="lm-live">
+                {live ? <span style={{ color: '#ffffff' }}>● Live</span> : <span style={{ color: '#94a3b8' }}>Reconnecting...</span>}
               </span>
             )}
             <button
@@ -469,15 +501,22 @@ export default function SitePermissionsPage() {
       {/* Permissions table */}
       {data && <PermissionsTable rows={filtered} />}
 
-      {/* No-data state when server is up but no permissions are recorded */}
+      {/* No-data state */}
       {data && allRows.length === 0 && !loading && (
         <div className="site-empty">
-          <span>📂</span>
-          <p>
-            No browser permissions found. Open Chrome, Edge, or Firefox and
-            grant camera/microphone access to a site, then click{' '}
-            <strong>Scan Now</strong>.
-          </p>
+          {detectedBrowsers.length === 0 ? (
+            <>
+              <span>📂</span>
+              <p>No compatible browser profiles detected on this machine.</p>
+            </>
+          ) : (
+            <>
+              <span>ℹ️</span>
+              <p>
+                No explicit permissions found in detected browsers. All sites are using default settings.
+              </p>
+            </>
+          )}
         </div>
       )}
 

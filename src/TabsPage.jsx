@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
 
 // How often to re-poll the backend for browser tab data (ms).
-const BROWSER_TABS_POLL_MS = 30_000
+const BROWSER_TABS_POLL_MS = 5_000
 
 // How often to refresh the running-processes list (ms).
 const PROCESSES_POLL_MS = 15_000
@@ -40,10 +41,10 @@ const PERMISSION_NAMES = [
 ]
 
 const STATUS_COLOR = {
-  granted: '#4ade80',
-  denied: '#f87171',
-  prompt: '#fbbf24',
-  unsupported: '#64748b',
+  granted: '#ffffff',
+  denied: '#4b5563',
+  prompt: '#94a3b8',
+  unsupported: '#334155',
 }
 
 const STATUS_ICON = {
@@ -165,38 +166,69 @@ function usePermissions() {
   return permissions
 }
 
-/**
- * Fetches open-tab data from the Node backend (/api/tabs).
- * The backend reads Chrome/Edge/Firefox history SQLite databases to produce
- * a list of recently-visited URLs (the best approximation of open tabs that
- * is possible without a browser extension).
- */
-function useBrowserTabs() {
-  const [data, setData] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState(null)
+function useBrowserMonitor() {
+  const detectedBrowsers = useDetectedBrowsers()
+  const [browserData, setBrowserData] = useState({})
+  const [connected, setConnected] = useState(false)
+  const [reconnecting, setReconnecting] = useState(false)
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const r = await fetch('/api/tabs')
-      if (!r.ok) throw new Error(`HTTP ${r.status}`)
-      setData(await r.json())
-      setError(null)
-    } catch (e) {
-      setError(e.message)
-    } finally {
-      setLoading(false)
+  useEffect(() => {
+    let ws
+    let reconnectTimeout
+    let backoff = 500
+
+    function connect() {
+      ws = new WebSocket('ws://127.0.0.1:8999/browser-monitor')
+
+      ws.onopen = () => {
+        setConnected(true)
+        setReconnecting(false)
+        backoff = 500
+      }
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data.event === 'tab_update') {
+            const bKey = data.browser.toLowerCase();
+            setBrowserData(prev => ({
+              ...prev,
+              [bKey]: {
+                tabs: data.tabs,
+                status: data.status,
+                error: data.error
+              }
+            }))
+          }
+        } catch (e) {
+          console.error('[BrowserMonitor] Error parsing message:', e)
+        }
+      }
+
+      ws.onclose = () => {
+        setConnected(false)
+        setReconnecting(true)
+        reconnectTimeout = setTimeout(connect, backoff)
+        backoff = Math.min(backoff * 2, 30_000)
+      }
+
+      ws.onerror = () => {
+        ws.close()
+      }
+    }
+
+    connect()
+
+    return () => {
+      clearTimeout(reconnectTimeout)
+      if (ws) {
+        ws.onclose = null
+        ws.close()
+      }
     }
   }, [])
 
-  useEffect(() => {
-    load()
-    const id = setInterval(load, BROWSER_TABS_POLL_MS)
-    return () => clearInterval(id)
-  }, [load])
-
-  return { data, loading, error, reload: load }
+  return { connected, reconnecting, detectedBrowsers, browserData }
 }
 
 /**
@@ -249,17 +281,23 @@ function useMediaDevices() {
       navigator.mediaDevices.enumerateDevices().then((list) => {
         setEnumError(null)
         setDevices(
-          list.map((d) => ({
-            kind    : d.kind,
-            label   : d.label || `${d.kind} (${(d.deviceId || '').slice(0, 8) || 'unknown'}…)`,
-            deviceId: d.deviceId,
-            groupId : d.groupId,
-          })),
-        )
+          list.map((d, i) => {
+            let fallback = 'Unknown Device';
+            if (d.kind === 'videoinput') fallback = 'Camera';
+            if (d.kind === 'audioinput') fallback = 'Microphone';
+            if (d.kind === 'audiooutput') fallback = 'Speaker';
+            return {
+              kind: d.kind,
+              label: d.label || `${fallback} ${i + 1}`,
+              deviceId: d.deviceId,
+              groupId: d.groupId,
+            };
+          })
+        );
       }).catch((e) => {
-        setEnumError(e.message)
-        setDevices([])
-      })
+        setEnumError(e.message);
+        setDevices([]);
+      });
 
     load()
     navigator.mediaDevices.addEventListener('devicechange', load)
@@ -273,9 +311,9 @@ function useMediaDevices() {
  * Polls the backend /api/scan/all for the running-processes list.
  */
 function useRunningProcesses() {
-  const [data,    setData]    = useState(null)
+  const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [error,   setError]   = useState(null)
+  const [error, setError] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -306,7 +344,7 @@ function useRunningProcesses() {
  * backend so we can annotate each history tab with its stored site permissions.
  */
 function useBrowserPermissions() {
-  const [data,    setData]    = useState(null)
+  const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
 
   const load = useCallback(async () => {
@@ -316,9 +354,9 @@ function useBrowserPermissions() {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const json = await r.json()
       setData({
-        chrome  : json.chrome  ?? {},
-        edge    : json.edge    ?? {},
-        firefox : json.firefox ?? {},
+        chrome: json.chrome ?? {},
+        edge: json.edge ?? {},
+        firefox: json.firefox ?? {},
       })
     } catch (err) {
       // Non-critical: permissions just won't appear next to tabs
@@ -351,71 +389,74 @@ function PermissionRow({ name, state }) {
 }
 
 function swStateColor(s) {
-  if (!s) return '#64748b'
-  if (s === 'activated') return '#4ade80'
-  if (s === 'activating' || s === 'installing') return '#fbbf24'
-  if (s === 'installed') return '#60a5fa'
+  if (!s) return '#334155'
+  if (s === 'activated') return '#ffffff'
+  if (s === 'activating' || s === 'installing') return '#e2e8f0'
+  if (s === 'installed') return '#cbd5e1'
   return '#94a3b8'
 }
 
-const BROWSER_META = [
-  { key: 'chrome',  icon: '🟡', label: 'Chrome'  },
-  { key: 'edge',    icon: '🔵', label: 'Edge'     },
-  { key: 'firefox', icon: '🦊', label: 'Firefox'  },
-]
+
 
 const PERM_CHIP_ICON = {
-  camera           : '📷',
-  microphone       : '🎤',
-  geolocation      : '📍',
-  notifications    : '🔔',
-  'clipboard-read' : '📋',
+  camera: '📷',
+  microphone: '🎤',
+  geolocation: '📍',
+  notifications: '🔔',
+  'clipboard-read': '📋',
   'clipboard-write': '📋',
 }
 
 /**
- * Build a hostname → { permName: status } map from a single browser's
- * permission scan result (as returned by chrome.js / firefox.js scanners).
+ * Utility to map a browser's permission database into a hostname -> perms lookup object.
+ * Format: { "example.com": { "camera": "allowed", "microphone": "blocked" } }
  */
-function buildPermLookup(permData) {
-  if (!permData || permData.error) return {}
-  const map = {}
-  for (const [perm, entries] of Object.entries(permData)) {
-    if (!Array.isArray(entries)) continue
-    for (const entry of entries) {
-      if (!entry || typeof entry !== 'object') continue
-      const { site, status } = entry
-      if (!site || !status) continue
-      if (!map[site]) map[site] = {}
-      map[site][perm] = status
+function buildPermLookup(data) {
+  const lookup = {}
+  if (!data) return lookup
+
+  // The scanner returns permission entries as arrays under keys like 'camera', 'microphone', etc.
+  const permissionNames = ['camera', 'microphone', 'geolocation', 'notifications']
+
+  for (const pName of permissionNames) {
+    const list = data[pName] || []
+    for (const entry of list) {
+      if (!entry.site) continue
+      if (!lookup[entry.site]) lookup[entry.site] = {}
+      lookup[entry.site][pName] = entry.status
     }
   }
-  return map
+  return lookup
 }
 
 /**
  * Shows real browser tabs read from the local history databases via the
- * Node backend. Falls back to a "server not running" notice gracefully.
+ * Python WebSocket backend.
  */
-function BrowserTabsPanel({ data, loading, error, onReload, browserPermissions }) {
-  const [activeBrowser, setActiveBrowser] = useState('chrome')
+function BrowserTabsPanel({ browserPermissions }) {
+  const { connected, reconnecting, detectedBrowsers, browserData } = useBrowserMonitor()
+  const [activeBrowser, setActiveBrowser] = useState('')
 
-  const browserData = BROWSER_META.map(({ key, icon, label }) => {
-    const entry = data?.[key]
-    return { key, icon, label, tabs: entry?.tabs ?? [], err: entry?.error ?? null }
-  })
+  useEffect(() => {
+    if (detectedBrowsers.length > 0 && !activeBrowser) {
+      setActiveBrowser(detectedBrowsers[0])
+    } else if (detectedBrowsers.length > 0 && !detectedBrowsers.includes(activeBrowser)) {
+      setActiveBrowser(detectedBrowsers[0])
+    }
+  }, [detectedBrowsers, activeBrowser])
 
-  const active = browserData.find((b) => b.key === activeBrowser)
+  const active = activeBrowser ? browserData[activeBrowser] : null
 
   // Build a hostname → { permName: status } lookup for the active browser
+  const permLookupKey = activeBrowser ? activeBrowser.toLowerCase() : ''
   const permLookup = useMemo(
-    () => buildPermLookup(browserPermissions?.[activeBrowser]),
-    [browserPermissions, activeBrowser],
+    () => buildPermLookup(browserPermissions?.[permLookupKey]),
+    [browserPermissions, permLookupKey],
   )
 
-  function formatTime(iso) {
-    if (!iso) return null
-    try { return new Date(iso).toLocaleTimeString() } catch { return null }
+  function formatTime(ms) {
+    if (!ms) return null
+    try { return new Date(ms).toLocaleTimeString() } catch { return null }
   }
 
   function hostname(url) {
@@ -424,61 +465,54 @@ function BrowserTabsPanel({ data, loading, error, onReload, browserPermissions }
 
   return (
     <section className="info-panel bt-panel">
-      <h2 className="panel-title">
+      <h2 className="panel-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span>🌐</span> Open Browser Tabs
-        {loading && <span className="bt-spinner">⟳</span>}
-        <button className="bt-reload-btn" onClick={onReload} title="Refresh tab list">🔄</button>
+        {connected ? (
+          <span title="Live" style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#ffffff', display: 'inline-block', boxShadow: '0 0 5px #ffffff' }}></span>
+        ) : reconnecting ? (
+          <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>Reconnecting...</span>
+        ) : null}
       </h2>
 
-      {/* Server offline notice */}
-      {error && !data && (
-        <div className="bt-server-off">
-          <span>🔌</span>
-          <div>
-            <strong>Backend not reachable</strong>
-            <p>
-              Start the server to read real tab data:{' '}
-              <code>npm run dev:server</code>
-            </p>
-            <p className="bt-err-detail">{error}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Browser selector tabs */}
-      {data && (
+      {/* Browser selector tabs (only show detected ones) */}
+      {detectedBrowsers.length > 0 ? (
         <div className="bt-browser-tabs">
-          {browserData.map(({ key, icon, label, tabs }) => (
-            <button
-              key={key}
-              className={`bt-browser-tab${activeBrowser === key ? ' active' : ''}`}
-              onClick={() => setActiveBrowser(key)}
-            >
-              {icon} {label}
-              <span className="bt-count">{tabs.length}</span>
-            </button>
-          ))}
+          {detectedBrowsers.map((browserName) => {
+            const meta = ALL_BROWSERS_META[browserName] || { icon: '🌐', label: browserName }
+            const tabsCount = browserData[browserName]?.tabs?.length || 0
+            return (
+              <button
+                key={browserName}
+                className={`bt-browser-tab${activeBrowser === browserName ? ' active' : ''}`}
+                onClick={() => setActiveBrowser(browserName)}
+              >
+                {meta.icon} {meta.label}
+                <span className="bt-count">{tabsCount}</span>
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="bt-tab-list">
+          <p className="info-msg">No browsers detected tracking history.</p>
         </div>
       )}
 
       {/* Tab list for active browser */}
-      {data && active && (
+      {active && (
         <div className="bt-tab-list">
-          {active.err ? (
+          {active.status === 'info' || active.status === 'error' ? (
             <div className="bt-browser-err">
-              <span>📂</span>
+              <span>{active.status === 'info' ? 'ℹ️' : '⚠️'}</span>
               <div>
-                <strong>Browser data unavailable</strong>
-                <p>{active.err}</p>
-                <p className="bt-hint">
-                  Make sure {active.label} has been opened at least once.
-                </p>
+                <strong>{active.status === 'info' ? 'Browser info' : 'Browser data error'}</strong>
+                <p>{active.error}</p>
               </div>
             </div>
-          ) : active.tabs.length === 0 ? (
-            <p className="info-msg">No recent tab history found for {active.label}.</p>
+          ) : active.tabs?.length === 0 ? (
+            <p className="info-msg">No recent tab history found for {activeBrowser}.</p>
           ) : (
-            active.tabs.map((tab, i) => {
+            active.tabs?.map((tab, i) => {
               const host = hostname(tab.url)
               const perms = permLookup[host] ?? {}
               const permEntries = Object.entries(perms)
@@ -525,21 +559,21 @@ function BrowserTabsPanel({ data, loading, error, onReload, browserPermissions }
  * - on Windows: CapabilityAccessManager app permission list
  */
 function OsBackgroundAppsPanel({ data, loading, error, onReload }) {
-  const camera    = data?.camera
-  const mic       = data?.microphone
-  const os        = data?.os
+  const camera = data?.camera
+  const mic = data?.microphone
+  const os = data?.os
 
-  const camProcs  = camera?.processes    ?? []
-  const micProcs  = mic?.processes       ?? []
-  const osCamera  = os?.camera           ?? []
-  const osMic     = os?.microphone       ?? []
-  const osGeo     = os?.geolocation      ?? []
+  const camProcs = camera?.processes ?? []
+  const micProcs = mic?.processes ?? []
+  const osCamera = os?.camera ?? []
+  const osMic = os?.microphone ?? []
+  const osGeo = os?.geolocation ?? []
 
   const anyActive = camera?.active || mic?.active || osCamera.length > 0 || osMic.length > 0
 
   function ProcRow({ icon, proc }) {
     const label = proc.process || proc.app || String(proc)
-    const sub   = proc.device || proc.pid ? `${proc.device ?? ''}${proc.pid ? ` (PID ${proc.pid})` : ''}` : null
+    const sub = proc.device || proc.pid ? `${proc.device ?? ''}${proc.pid ? ` (PID ${proc.pid})` : ''}` : null
     return (
       <div className="bg-proc-row">
         <span className="bg-proc-icon">{icon}</span>
@@ -552,7 +586,7 @@ function OsBackgroundAppsPanel({ data, loading, error, onReload }) {
   }
 
   function OsPermRow({ entry }) {
-    const color = entry.status === 'allowed' ? '#4ade80' : '#f87171'
+    const color = entry.status === 'allowed' ? '#ffffff' : '#4b5563'
     return (
       <div className="bg-proc-row">
         <span className="bg-proc-name">{entry.app || entry.error}</span>
@@ -655,17 +689,36 @@ function OsBackgroundAppsPanel({ data, loading, error, onReload }) {
 // ── Media Devices Panel ───────────────────────────────────────────────────────
 
 const DEVICE_KIND_META = {
-  videoinput  : { icon: '📷', label: 'Camera',     color: '#f87171' },
-  audioinput  : { icon: '🎤', label: 'Microphone', color: '#fb923c' },
-  audiooutput : { icon: '🔊', label: 'Speaker',    color: '#60a5fa' },
+  videoinput: { icon: '📷', label: 'Camera', color: '#ffffff' },
+  audioinput: { icon: '🎤', label: 'Microphone', color: '#e2e8f0' },
+  audiooutput: { icon: '🔊', label: 'Speaker', color: '#94a3b8' },
 }
 
 function MediaDevicesPanel({ devices, enumError }) {
+  const [requesting, setRequesting] = useState(false)
+
   const grouped = {}
+  let hasHiddenNames = false;
   for (const d of (devices ?? [])) {
     if (!grouped[d.kind]) grouped[d.kind] = []
     grouped[d.kind].push(d)
+    if (d.label.startsWith('Camera') || d.label.startsWith('Microphone') || d.label.startsWith('Speaker') || d.label.startsWith('Unknown')) {
+      hasHiddenNames = true;
+    }
   }
+
+  const requestPermissions = async () => {
+    try {
+      setRequesting(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      stream.getTracks().forEach(track => track.stop()); // Stop immediately
+      // The devicechange event should naturally re-trigger the load() in useMediaDevices
+    } catch (e) {
+      console.error("Failed to get permissions for device names:", e);
+    } finally {
+      setRequesting(false);
+    }
+  };
   const kinds = Object.keys(DEVICE_KIND_META)
 
   return (
@@ -689,6 +742,18 @@ function MediaDevicesPanel({ devices, enumError }) {
 
       {devices !== null && !enumError && devices.length === 0 && (
         <p className="info-msg">No media devices detected.</p>
+      )}
+
+      {hasHiddenNames && (
+        <div style={{ padding: '0.5rem 1.25rem' }}>
+          <button
+            onClick={requestPermissions}
+            disabled={requesting}
+            style={{ backgroundColor: 'rgba(59, 130, 246, 0.15)', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+          >
+            {requesting ? 'Requesting...' : '👁️ Reveal Real Device Names (Requires Permission)'}
+          </button>
+        </div>
       )}
 
       {devices !== null && devices.length > 0 && (
@@ -731,7 +796,7 @@ function RunningAppsPanel({ data, loading, error, onReload }) {
   const [search, setSearch] = useState('')
 
   const processes = useMemo(() => data?.processes ?? [], [data])
-  const note      = data?.note
+  const note = data?.note
   const procError = data?.error
 
   const filtered = useMemo(() => {
@@ -818,7 +883,6 @@ export default function TabsPage() {
   const serviceWorkers = useServiceWorkers()
   const webLocks = useWebLocks()
   const { devices: mediaDevices, enumError: mediaDevicesError } = useMediaDevices()
-  const { data: browserTabsData, loading: browserTabsLoading, error: browserTabsError, reload: reloadTabs } = useBrowserTabs()
   const { data: bgAppsData, loading: bgAppsLoading, error: bgAppsError, reload: reloadBgApps } = useOsBackgroundApps()
   const { data: processesData, loading: processesLoading, error: processesError, reload: reloadProcesses } = useRunningProcesses()
   const { data: browserPermissions } = useBrowserPermissions()
@@ -842,8 +906,7 @@ export default function TabsPage() {
         <span className="notice-icon">ℹ️</span>
         <div>
           <strong>Browser tabs &amp; active background apps:</strong> Browser
-          history is read from Chrome/Edge/Firefox local SQLite databases by the
-          Node backend. OS-level background apps (processes actively using the
+          history is read from local SQLite databases via real-time WebSocket connection to the Python backend. OS-level background apps (processes actively using the
           camera or microphone) are detected via <code>/proc</code> on Linux,
           the CapabilityAccessManager registry on Windows, or{' '}
           <code>lsof</code> on macOS.
@@ -851,22 +914,11 @@ export default function TabsPage() {
       </div>
 
       <div className="tabs-grid">
-        {/* Real browser tabs from the Node backend */}
+        {/* Real browser tabs from the WebSocket backend */}
         <BrowserTabsPanel
-          data={browserTabsData}
-          loading={browserTabsLoading}
-          error={browserTabsError}
-          onReload={reloadTabs}
           browserPermissions={browserPermissions}
         />
 
-        {/* Active Background Apps from OS (camera/mic processes + Windows permissions) */}
-        <OsBackgroundAppsPanel
-          data={bgAppsData}
-          loading={bgAppsLoading}
-          error={bgAppsError}
-          onReload={reloadBgApps}
-        />
 
         {/* Service Workers (background apps) */}
         <section className="info-panel">

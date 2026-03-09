@@ -11,13 +11,13 @@
  * Returns:
  *   { active: bool, processes: [...], audioDevices: [...], error?: string }
  */
-const fs           = require('fs');
+const fs = require('fs');
 const { execSync } = require('child_process');
 
 function detectActiveMicrophone() {
   const plat = process.platform;
-  if (plat === 'linux')  return detectLinux();
-  if (plat === 'win32')  return detectWindows();
+  if (plat === 'linux') return detectLinux();
+  if (plat === 'win32') return detectWindows();
   if (plat === 'darwin') return detectMac();
   return { active: false, processes: [], error: `Unsupported platform: ${plat}` };
 }
@@ -85,8 +85,8 @@ function detectWindows() {
     `    Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {`,
     `      $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;`,
     `      if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {`,
-    // Win32 NonPackaged keys are stored as "C:#Program Files#App#app.exe" — split on '#' to get the exe path.
-    `        $active += ($_.PSChildName -split '#')[0]`,
+    // Win32 NonPackaged keys are stored as "C:#Program Files#App#app.exe" — replace '#' with '\' to get the exe path.
+    `        $active += ($_.PSChildName).Replace('#','\\')`,
     `      }`,
     `    }`,
     `  } else {`,
