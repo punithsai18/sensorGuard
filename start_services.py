@@ -32,6 +32,7 @@ SERVICES = [
     {"label": "BackgroundApps",    "script": "background_apps_monitor.py", "port": 8997},
     {"label": "ScreenTimeTracker", "script": "screenTimeTracker.py",        "port": 8998},
     {"label": "BrowserMonitor",    "script": "browser_monitor.py",          "port": 8999},
+    {"label": "TimelineLogger",    "script": "timeline_logger.py",          "port": 9000},
 ]
 
 # ANSI color codes for terminal labels (cycles through the list)

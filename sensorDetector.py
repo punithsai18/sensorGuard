@@ -109,10 +109,17 @@ def check_screen_capture():
 
 def check_keyboard_hooks():
     if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
-    # Strict keylogger/hook detection requires heavy C++ DLL injection to iterate hooks via GetWindowsHookEx.
-    # As a lightweight heuristic in Python, we check for processes NOT belonging to C:\Windows running
-    # from suspicious Temp/AppData directories with active child spawned conhosts.
-    # For SensorGuard demo, we will surface a generic idle state unless a synthetic test triggers it.
+    # Lightweight heuristic: check for common automation/remapping tools that use hooks
+    suspicious = ['AutoHotkey.exe', 'SharpKeys.exe', 'KeyCastOW.exe', 'PowerToys.KeyboardManager.exe']
+    running = []
+    for proc in psutil.process_iter(['name']):
+        try:
+            if proc.info['name'] in suspicious:
+                running.append(proc.info['name'])
+        except: pass
+    
+    if running:
+        return {"status": "DETECTED", "info": f"Possible hooks: {', '.join(set(running))}"}
     return {"status": "IDLE", "info": "—"}
 
 def check_network():
@@ -141,6 +148,68 @@ def check_usb():
         
     return {"status": "IDLE", "info": "—"}
 
+def check_camera():
+    if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
+    import subprocess
+    ps = r"""
+    $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam';
+    $active = @();
+    Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.PSChildName -eq 'NonPackaged') {
+            Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+                $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+                if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                    $active += ($_.PSChildName).Replace('#','\\')
+                }
+            }
+        } else {
+            $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+            if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                $active += $_.PSChildName
+            }
+        }
+    };
+    $active | Select-Object -Unique
+    """
+    try:
+        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], encoding='utf8', timeout=5)
+        procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
+        if procs:
+            return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
+    except: pass
+    return {"status": "IDLE", "info": "—"}
+
+def check_microphone():
+    if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
+    import subprocess
+    ps = r"""
+    $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone';
+    $active = @();
+    Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.PSChildName -eq 'NonPackaged') {
+            Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+                $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+                if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                    $active += ($_.PSChildName).Replace('#','\\')
+                }
+            }
+        } else {
+            $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+            if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                $active += $_.PSChildName
+            }
+        }
+    };
+    $active | Select-Object -Unique
+    """
+    try:
+        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], encoding='utf8', timeout=5)
+        procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
+        if procs:
+            return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
+    except: pass
+    return {"status": "IDLE", "info": "—"}
+
 
 def gather_sensors():
     return {
@@ -149,7 +218,9 @@ def gather_sensors():
         "screen_capture": check_screen_capture(),
         "keyboard": check_keyboard_hooks(),
         "network": check_network(),
-        "usb": check_usb()
+        "usb": check_usb(),
+        "camera": check_camera(),
+        "microphone": check_microphone()
     }
 
 async def broadcast_loop():
@@ -158,7 +229,7 @@ async def broadcast_loop():
         cached = gather_sensors()
     except Exception as e:
         logger.error(f"Initial gather_sensors failed: {e}")
-        cached = {k: {"status": "IDLE", "info": "—"} for k in ["location", "clipboard", "screen_capture", "keyboard", "network", "usb"]}
+        cached = {k: {"status": "IDLE", "info": "—"} for k in ["location", "clipboard", "screen_capture", "keyboard", "network", "usb", "camera", "microphone"]}
     
     while True:
         await asyncio.sleep(2)
@@ -181,18 +252,33 @@ async def broadcast_loop():
                         cached[k] = {"status": "IDLE", "info": "—"}
                 else:
                     cached[k] = {"status": "IDLE", "info": "—"}
-        # update the rest directly
-        for k in ["location", "screen_capture", "network", "usb"]:
             
-            # Special check for USB plugin/plugout events
-            if k == "usb":
-                old_status = cached.get("usb", {}).get("status", "IDLE")
-                new_status = current.get("usb", {}).get("status", "IDLE")
-                old_info = cached.get("usb", {}).get("info", "")
-                new_info = current.get("usb", {}).get("info", "")
+            # Log volatile states to timeline when they happen
+            if current[k]["status"] != "IDLE":
+                if k == "clipboard":
+                    log_event("HARDWARE", "Clipboard", current[k]["info"])
+                elif k == "keyboard":
+                    log_event("HARDWARE", "Keyboard", current[k]["info"])
+
+        # update the rest directly
+        for k in ["location", "screen_capture", "network", "usb", "camera", "microphone"]:
+            
+            # Special check for sensor activation events for timeline logging
+            old_status = cached.get(k, {}).get("status", "IDLE")
+            new_status = current.get(k, {}).get("status", "IDLE")
+            old_info = cached.get(k, {}).get("info", "")
+            new_info = current.get(k, {}).get("info", "")
+            
+            if old_status != new_status or (new_status != "IDLE" and old_info != new_info):
+                event_type = "HARDWARE"
+                if k in ["camera", "microphone"]: event_type = k.upper()
+                if k == "location": event_type = "SYSTEM"
                 
-                if old_status != new_status or old_info != new_info:
-                    log_event("HARDWARE", "USB", f"{new_status}: {new_info}")
+                # Log activation/change to timeline
+                if new_status != "IDLE":
+                    log_event(event_type, k.capitalize(), new_info)
+                elif old_status != "IDLE":
+                    log_event(event_type, k.capitalize(), f"Access stopped")
 
             cached[k] = current[k]
                 

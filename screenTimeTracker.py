@@ -14,6 +14,11 @@ from websockets.http11 import Response
 from websockets.datastructures import Headers
 
 try:
+    from timeline_logger import log_event
+except ImportError:
+    def log_event(*args): pass
+
+try:
     import ctypes
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
@@ -184,6 +189,7 @@ def get_website_from_title(app_name, title):
 
 screen_time_buffer = {}
 last_db_write = time.time()
+last_active_app = None
 
 def flush_screen_time_buffer():
     if not screen_time_buffer:
@@ -206,11 +212,15 @@ def flush_screen_time_buffer():
         logger.error(f"Error storing screen time: {e}")
 
 async def screen_time_loop():
-    global last_db_write
+    global last_db_write, last_active_app
     while True:
         await asyncio.sleep(1)
         idle_time = get_idle_time_windows() if IS_WINDOWS else 0
         if idle_time > 60:
+            if last_active_app:
+                # User went idle
+                log_event("SYSTEM", "User State", "User is now idle")
+                last_active_app = None
             continue  # User is idle, don't count
             
         app_exe, title, pid = get_active_window_info()
@@ -219,12 +229,16 @@ async def screen_time_loop():
         app_name = clean_app_name(app_exe, title)
         website = get_website_from_title(app_name, title)
         
-        # We store website tracking under the app_name artificially for simplicity:
-        # e.g., 'Google Chrome::youtube.com'
         record_name = app_name
         if website:
             record_name = f"{app_name}::{website}"
             
+        # Log focus change to timeline
+        current_focus = record_name if not website else f"{app_name} ({website})"
+        if current_focus != last_active_app:
+            log_event("APP", app_name, f"Focused on: {title or app_name}")
+            last_active_app = current_focus
+
         today = datetime.now().strftime("%Y-%m-%d")
         now_str = datetime.now().isoformat()
         

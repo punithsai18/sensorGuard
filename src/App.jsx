@@ -245,6 +245,30 @@ function App() {
   const time = useClock()
   const [screenInfo, setScreenInfo] = useState(getScreenInfo)
   const [memInfo, setMemInfo] = useState(getMemoryInfo)
+  const [screenTimeSummary, setScreenTimeSummary] = useState(null)
+  const [timelineSummary, setTimelineSummary] = useState([])
+
+  useEffect(() => {
+    async function fetchSummaries() {
+      try {
+        const [stRes, tlRes] = await Promise.all([
+          fetch('/api/screentime'),
+          fetch('/api/timeline')
+        ]);
+        if (stRes.ok) setScreenTimeSummary(await stRes.json());
+        if (tlRes.ok) {
+            const tlData = await tlRes.json();
+            setTimelineSummary((tlData.events || []).slice(0, 5));
+        }
+      } catch (e) {
+        console.error("Failed to fetch summaries:", e);
+      }
+    }
+    fetchSummaries();
+    const id = setInterval(fetchSummaries, 30000);
+    return () => clearInterval(id);
+  }, [])
+
   useEffect(() => {
     const update = () => setScreenInfo(getScreenInfo())
     window.addEventListener('resize', update)
@@ -333,6 +357,49 @@ function App() {
         <TimelinePage />
       ) : (
         <main className="sensor-grid">
+          {/* Screen Time Summary */}
+          <SensorCard title="Screen Time Today" icon="🕐" status={screenTimeSummary ? 'active' : 'inactive'}>
+            {screenTimeSummary ? (
+              <>
+                <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--color-primary)', marginBottom: '0.5rem' }}>
+                    {formatDuration(screenTimeSummary.total_seconds)}
+                </div>
+                <p className="section-label">Top Applications</p>
+                {screenTimeSummary.apps.slice(0, 3).map((app, i) => (
+                    <DataRow key={i} label={app.name} value={formatDuration(app.seconds)} />
+                ))}
+                <button 
+                  onClick={() => setPage('screen-time')}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--color-primary)', fontSize: '0.75rem', padding: '0.5rem 0', cursor: 'pointer', textAlign: 'left' }}
+                >
+                  View Full Report →
+                </button>
+              </>
+            ) : <p className="loading-msg">Loading screen stats…</p>}
+          </SensorCard>
+
+          {/* Timeline Summary */}
+          <SensorCard title="Recent Activity" icon="🕰️" status={timelineSummary.length > 0 ? 'active' : 'inactive'}>
+            {timelineSummary.length > 0 ? (
+                <>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {timelineSummary.map((evt, i) => (
+                            <div key={i} style={{ fontSize: '0.75rem', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>
+                                <span style={{ color: 'var(--color-primary)', fontWeight: 'bold' }}>{evt.event_type}:</span> {evt.event_source}
+                                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.65rem' }}>{evt.event_detail}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <button 
+                      onClick={() => setPage('timeline')}
+                      style={{ background: 'transparent', border: 'none', color: 'var(--color-primary)', fontSize: '0.75rem', padding: '0.5rem 0 0 0', cursor: 'pointer', textAlign: 'left' }}
+                    >
+                      View All Events →
+                    </button>
+                </>
+            ) : <p className="info-msg">No recent events logged.</p>}
+          </SensorCard>
+
           {/* Battery */}
           <SensorCard
             title="Battery"
@@ -474,12 +541,6 @@ function App() {
               <span className="ua-text">{navigator.userAgent}</span>
             </div>
           </SensorCard>
-        </main>
-      )}
-
-      {page === 'timeline' && (
-        <main className="app-main">
-          <TimelinePage />
         </main>
       )}
 

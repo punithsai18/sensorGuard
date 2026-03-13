@@ -20,21 +20,29 @@ logger = logging.getLogger("BrowserMonitor")
 BROWSER_PROFILES = {
     "Chrome": [
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/Google/Chrome/Default/History"),
-        os.path.expanduser(r"~/.config/google-chrome/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Google/Chrome/Profile*/History"),
+        os.path.expanduser(r"~/.config/google-chrome/Default/History"),
+        os.path.expanduser(r"~/.config/google-chrome/Profile*/History")
     ],
     "Edge": [
         os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/Microsoft Edge/Default/History"),
-        os.path.expanduser(r"~/.config/microsoft-edge/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Microsoft Edge/Profile*/History"),
+        os.path.expanduser(r"~/.config/microsoft-edge/Default/History"),
+        os.path.expanduser(r"~/.config/microsoft-edge/Profile*/History")
     ],
     "Firefox": [
         os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles\*.default*\places.sqlite"),
+        os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles\*.default-release*\places.sqlite"),
         os.path.expanduser(r"~/Library/Application Support/Firefox/Profiles/*.default*/places.sqlite"),
         os.path.expanduser(r"~/.mozilla/firefox/*.default*/places.sqlite")
     ],
     "Brave": [
         os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/BraveSoftware/Brave-Browser/Default/History"),
         os.path.expanduser(r"~/.config/BraveSoftware/Brave-Browser/Default/History")
     ],
@@ -50,7 +58,7 @@ BROWSER_PROFILES = {
     ],
     "Arc": [
         os.path.expandvars(r"%LOCALAPPDATA%\Packages\TheBrowserCompany*\LocalCache\Local\Arc\User Data\Default\History"),
-        os.path.expanduser(r"~/Library/Application Support/Arc/User Data/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Arc/User Data\Default\History")
     ]
 }
 
@@ -58,17 +66,27 @@ DETECTED_BROWSERS = {}
 
 def scan_browsers():
     detected = {}
-    for name, paths in BROWSER_PROFILES.items():
-        found = False
-        for p in paths:
-            matches = glob.glob(p)
-            for m in matches:
-                if os.path.exists(m):
-                    detected[name] = m
-                    found = True
-                    break
-            if found:
-                break
+    for name, patterns in BROWSER_PROFILES.items():
+        matches = []
+        for p in patterns:
+            matches.extend(glob.glob(p))
+            
+        # If multiple profiles exist, pick the one with the most recent modification time
+        best_match = None
+        best_mtime = 0
+        for m in matches:
+            if os.path.exists(m):
+                try:
+                    mtime = os.path.getmtime(m)
+                    if mtime > best_mtime:
+                        best_mtime = mtime
+                        best_match = m
+                except:
+                    pass
+        
+        if best_match:
+            detected[name] = best_match
+            
     return detected
 
 def query_history(browser_name, db_path):

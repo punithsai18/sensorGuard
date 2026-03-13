@@ -39,7 +39,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      connectSrc: ["'self'", 'ws://127.0.0.1:8996', 'ws://127.0.0.1:8997'],
+      connectSrc: ["'self'", 'ws://127.0.0.1:8996', 'ws://127.0.0.1:8997', 'ws://127.0.0.1:8998', 'ws://127.0.0.1:8999', 'ws://127.0.0.1:9000'],
       imgSrc: ["'self'", 'data:'],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
