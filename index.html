@@ -4,6 +4,19 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Prevent search engines and bots from indexing this local tool -->
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <!-- Restrict where the page can be framed -->
+    <!--
+      This meta-tag CSP applies when the frontend is served by the Vite dev
+      server (port 5173), which does not add HTTP headers itself.  In
+      production the equivalent HTTP header is emitted by helmet in
+      server/index.js.  Both are intentionally present to cover both modes.
+    -->
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:8996 ws://127.0.0.1:8997; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none';" />
+    <!-- Limit referrer information sent to third parties -->
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
     <title>SensorGuard — Real-Time Laptop Sensor Dashboard</title>
   </head>
   <body>

@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useDetectedBrowsers, ALL_BROWSERS_META } from './browserDetection.js'
+import {
+  SENSOR_RISK_WEIGHTS,
+  RISK_THRESHOLDS,
+  getRiskRating,
+  computeOverallRisk,
+  getRiskAlertMessage,
+} from './riskMatrix.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
@@ -190,7 +197,7 @@ function MultiSensorAttackAlert({ cameraActive, micActive, sensors }) {
   );
 }
 
-function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors }) {
+function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors, risk }) {
   const [killingProc, setKillingProc] = useState(null);
 
   const camActive = camera?.active ?? false
@@ -285,6 +292,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem' }}>
                 <span style={{ color: camActive ? '#4ade80' : '#64748b' }}>{camActive ? 'NORMAL' : '—'}</span>
+                {camActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.camera})</span>}
                 {camActive && camDet.pid && (
                   <button
                     disabled={killingProc === camDet.pid}
@@ -310,6 +318,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem' }}>
                 <span style={{ color: micActive ? '#4ade80' : '#64748b' }}>{micActive ? 'NORMAL' : '—'}</span>
+                {micActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.microphone})</span>}
                 {micActive && micDet.pid && (
                   <button
                     disabled={killingProc === micDet.pid}
@@ -334,6 +343,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sLoc.status === 'ACTIVE' ? '#60a5fa' : '#64748b' }}>
                   {sLoc.status === 'ACTIVE' ? 'LOW' : '—'}
                 </span>
+                {sLoc.status === 'ACTIVE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.location})</span>}
               </td>
             </tr>
 
@@ -350,6 +360,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sClip.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sClip.status !== 'IDLE' ? 'HIGH' : '—'}
                 </span>
+                {sClip.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.clipboard})</span>}
               </td>
             </tr>
 
@@ -366,6 +377,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sScreen.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sScreen.status !== 'IDLE' ? 'HIGH' : '—'}
                 </span>
+                {sScreen.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.screen_capture})</span>}
               </td>
             </tr>
 
@@ -382,6 +394,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sKey.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
                   {sKey.status !== 'IDLE' ? 'CRITICAL' : '—'}
                 </span>
+                {sKey.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.keyboard})</span>}
               </td>
             </tr>
 
@@ -397,6 +410,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sNet.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sNet.status !== 'IDLE' ? 'NORMAL' : '—'}
                 </span>
+                {sNet.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.network})</span>}
               </td>
             </tr>
 
@@ -413,11 +427,143 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <span style={{ color: sUsb.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
                   {sUsb.status !== 'IDLE' ? 'LOW' : '—'}
                 </span>
+                {sUsb.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.usb})</span>}
               </td>
             </tr>
 
           </tbody>
         </table>
+      </div>
+    </section>
+  )
+}
+
+// ── Risk Score Components ─────────────────────────────────────────────────────
+
+function RiskBadge({ rating }) {
+  const meta = RISK_THRESHOLDS[rating] ?? RISK_THRESHOLDS.LOW
+  return (
+    <span
+      className="lm-risk-badge"
+      style={{ background: meta.bg, color: meta.color, border: `1px solid ${meta.color}` }}
+    >
+      {meta.icon} {meta.label}
+    </span>
+  )
+}
+
+function RiskRatingAlert({ risk }) {
+  const msg = getRiskAlertMessage(risk.rating, risk.activeHighRiskSensors)
+  if (!msg) return null
+  const cls = `lm-risk-alert lm-risk-alert-${risk.rating.toLowerCase()}`
+  const icon = risk.rating === 'HIGH' ? '🔴' : '🟡'
+  return (
+    <div className={cls}>
+      <span className="lm-alert-icon">{icon}</span>
+      <div>
+        <strong>{msg.title}</strong>
+        <p style={{ marginTop: '0.25rem', opacity: 0.9 }}>{msg.detail}</p>
+      </div>
+    </div>
+  )
+}
+
+function RiskScorePanel({ risk }) {
+  const { scores, isActive, maxScore, totalScore, rating, activeHighRiskSensors } = risk
+  const ratingMeta = RISK_THRESHOLDS[rating] ?? RISK_THRESHOLDS.LOW
+
+  return (
+    <section className="info-panel lm-panel" style={{ marginBottom: '1rem' }}>
+      <h2 className="panel-title" style={{ borderBottom: '1px solid #333333' }}>
+        <span>📊</span> RISK SCORE MATRIX
+      </h2>
+
+      <div className="ds-table-wrap" style={{ marginTop: '0' }}>
+        <table className="ds-table" style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ textAlign: 'left', background: '#111111', borderBottom: '2px solid #333333' }}>
+              <th style={{ padding: '0.75rem' }}>SENSOR</th>
+              <th style={{ padding: '0.75rem', textAlign: 'center' }}>LIKELIHOOD (1–5)</th>
+              <th style={{ padding: '0.75rem', textAlign: 'center' }}>IMPACT (1–5)</th>
+              <th style={{ padding: '0.75rem', textAlign: 'center' }}>SCORE (/25)</th>
+              <th style={{ padding: '0.75rem' }}>RATING</th>
+              <th style={{ padding: '0.75rem', color: '#64748b', fontWeight: 400, fontSize: '0.75rem' }}>DESCRIPTION</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(SENSOR_RISK_WEIGHTS).map(([key, meta]) => {
+              const active  = isActive[key]
+              const score   = scores[key]
+              const r       = getRiskRating(score)
+              const rMeta   = RISK_THRESHOLDS[r]
+              const barPct  = Math.round((score / 25) * 100)
+              return (
+                <tr
+                  key={key}
+                  style={{
+                    borderBottom: '1px solid #1e293b',
+                    background: active && r !== 'LOW' ? `${rMeta.bg}` : '',
+                    opacity: active ? 1 : 0.55,
+                  }}
+                >
+                  <td style={{ padding: '0.65rem 0.75rem', fontWeight: 500 }}>
+                    {meta.icon} {meta.label}
+                    {!active && <span style={{ marginLeft: '0.4rem', color: '#475569', fontSize: '0.72rem' }}>IDLE</span>}
+                  </td>
+                  <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center', color: '#94a3b8' }}>
+                    {active ? meta.likelihood : 1}
+                  </td>
+                  <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center', color: '#94a3b8' }}>
+                    {active ? meta.impact : 1}
+                  </td>
+                  <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center' }}>
+                    <div className="lm-score-bar-wrap" style={{ justifyContent: 'center' }}>
+                      <span style={{ fontWeight: 700, color: active ? rMeta.color : '#475569', minWidth: '1.5rem' }}>
+                        {score}
+                      </span>
+                      <div className="lm-score-bar">
+                        <div
+                          className="lm-score-bar-fill"
+                          style={{ width: `${barPct}%`, background: active ? rMeta.color : '#334155' }}
+                        />
+                      </div>
+                    </div>
+                  </td>
+                  <td style={{ padding: '0.65rem 0.75rem' }}>
+                    {active
+                      ? <RiskBadge rating={r} />
+                      : <span style={{ color: '#475569', fontSize: '0.78rem' }}>—</span>
+                    }
+                  </td>
+                  <td style={{ padding: '0.65rem 0.75rem', fontSize: '0.75rem', color: '#64748b' }}>
+                    {meta.description}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Overall risk summary bar */}
+      <div className="lm-risk-overall">
+        <div>
+          <div className="lm-risk-score-big" style={{ color: ratingMeta.color }}>
+            {maxScore}<span style={{ fontSize: '1rem', color: '#64748b' }}>/25</span>
+          </div>
+          <div className="lm-risk-score-label">Max Risk Score</div>
+        </div>
+        <div>
+          <div style={{ marginBottom: '0.3rem' }}>Overall Rating: <RiskBadge rating={rating} /></div>
+          <div className="lm-risk-score-label">Active sensor total: {totalScore} pts</div>
+        </div>
+        <div className="lm-risk-summary">
+          <p>
+            {activeHighRiskSensors.length > 0
+              ? `High/medium-risk sensors active: ${activeHighRiskSensors.join(', ')}.`
+              : 'No elevated-risk sensors currently active.'}
+          </p>
+        </div>
       </div>
     </section>
   )
@@ -715,6 +861,11 @@ export default function LiveMonitorPage() {
   const bgApps = useBackgroundWindowTitles()
   const detectedBrowsers = useDetectedBrowsers()
 
+  const risk = useMemo(
+    () => computeOverallRisk(data?.camera?.active, data?.microphone?.active, advancedSensors),
+    [data, advancedSensors]
+  )
+
   const scan = useCallback(async () => {
     setLoading(true)
     try {
@@ -745,16 +896,30 @@ export default function LiveMonitorPage() {
   const exportToCSV = useCallback(() => {
     if (!data) return;
     const rows = [];
-    rows.push(["Topic", "Status/Count", "Detail"]);
+    rows.push(["Topic", "Status/Count", "Detail", "Risk Score", "Risk Rating"]);
+
+    // Overall risk
+    rows.push(["Overall Risk", risk.rating, `Max score: ${risk.maxScore}/25  Active total: ${risk.totalScore}`, risk.maxScore, risk.rating]);
+
+    // Per-sensor risk
+    for (const [key, meta] of Object.entries(SENSOR_RISK_WEIGHTS)) {
+      const active = risk.isActive[key];
+      const score  = risk.scores[key];
+      rows.push([meta.label, active ? "Active" : "Idle", meta.description, score, getRiskRating(score)]);
+    }
+
+    rows.push([]); // blank separator
 
     // Quick Sensors
-    rows.push(["Camera", data.camera?.active ? "Active" : "Idle", ""]);
-    rows.push(["Microphone", data.microphone?.active ? "Active" : "Idle", ""]);
+    const cameraActive = data.camera?.active ?? false;
+    const micActive    = data.microphone?.active ?? false;
+    rows.push(["Camera", cameraActive ? "Active" : "Idle", "", risk.scores.camera, getRiskRating(risk.scores.camera)]);
+    rows.push(["Microphone", micActive ? "Active" : "Idle", "", risk.scores.microphone, getRiskRating(risk.scores.microphone)]);
 
     // Background processes
     if (data.processes?.processes) {
       data.processes.processes.forEach(p => {
-        rows.push(["Process", p.name, `PID: ${p.pid} CPU: ${p.cpu || ''}`]);
+        rows.push(["Process", p.name, `PID: ${p.pid} CPU: ${p.cpu || ''}`, "", ""]);
       });
     }
 
@@ -766,7 +931,7 @@ export default function LiveMonitorPage() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-  }, [data]);
+  }, [data, risk]);
 
   const browserData = {};
   if (data) {
@@ -790,6 +955,9 @@ export default function LiveMonitorPage() {
       </div>
 
       {error && !data && <ServerOffBanner error={error} />}
+
+      {/* Risk Rating Alert Banner */}
+      {data && <RiskRatingAlert risk={risk} />}
 
       {/* Multi-Sensor Attack Alert Banner */}
       {data && (
@@ -815,8 +983,12 @@ export default function LiveMonitorPage() {
           browserData={browserData}
           bgApps={bgApps}
           advancedSensors={advancedSensors}
+          risk={risk}
         />
       )}
+
+      {/* Risk Score Matrix Panel */}
+      {data && <RiskScorePanel risk={risk} />}
 
       {/* Main content grid */}
       {data && (

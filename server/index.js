@@ -6,11 +6,13 @@
  *   GET /api/health    – liveness probe
  *
  * Start: node server/index.js
- * Default port: 3001  (override via PORT env var)
+ * Default port: 3005  (override via PORT env var)
  */
 const express = require('express');
 const cors = require('cors');
-const { execSync } = require('child_process');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { execFileSync } = require('child_process');
 
 const { parsePrefs } = require('./scanners/chrome');
 const { scanFirefox } = require('./scanners/firefox');
@@ -24,7 +26,69 @@ const { getDetectedBrowsers } = require('./scanners/browserDetection');
 const app = express();
 const PORT = process.env.PORT || 3005;
 
-app.use(cors());
+// ── Security headers ──────────────────────────────────────────────────────────
+
+// Remove X-Powered-By to avoid fingerprinting the server technology.
+app.disable('x-powered-by');
+
+// Helmet sets secure HTTP headers (CSP, X-Frame-Options, X-Content-Type-Options,
+// Referrer-Policy, Strict-Transport-Security, etc.).
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      connectSrc: ["'self'", 'ws://127.0.0.1:8996', 'ws://127.0.0.1:8997'],
+      imgSrc: ["'self'", 'data:'],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+    },
+  },
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+  crossOriginResourcePolicy: { policy: 'same-origin' },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
+
+// ── CORS ──────────────────────────────────────────────────────────────────────
+
+// Restrict CORS to localhost only – this is a local desktop tool.
+const ALLOWED_ORIGINS = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3005',
+  'http://127.0.0.1:3005',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (e.g. direct curl calls from localhost)
+    // or from the known allowed origins.
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+    callback(new Error('CORS: origin not allowed'));
+  },
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type'],
+}));
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+
+// Limit each IP to 120 requests per minute to prevent API abuse.
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please slow down.' },
+});
+app.use(limiter);
+
+// ── Body parsing ──────────────────────────────────────────────────────────────
+
 app.use(express.json());
 
 // ── Health check ──────────────────────────────────────────────────────────────
@@ -160,16 +224,29 @@ app.get('/api/scan/all', async (_req, res) => {
 // ── Process Kill ──────────────────────────────────────────────────────────────
 
 app.post('/api/kill', (req, res) => {
-  const { pid } = req.body;
-  if (!pid) return res.status(400).json({ error: 'PID is required' });
+  const raw = req.body && req.body.pid;
+  if (raw === undefined || raw === null || raw === '') {
+    return res.status(400).json({ error: 'PID is required' });
+  }
+
+  // Accept only a positive integer PID to prevent command injection.
+  // PID_MAX is the Linux kernel maximum (4,194,304 = 2²²); Windows also
+  // uses 32-bit PIDs that are always multiples of 4, so this upper bound is safe.
+  const PID_MAX = 4194304;
+  const pidNum = Number(raw);
+  if (!Number.isInteger(pidNum) || pidNum <= 0 || pidNum > PID_MAX) {
+    return res.status(400).json({ error: 'Invalid PID' });
+  }
 
   try {
     if (process.platform === 'win32') {
-      execSync(`taskkill /F /PID ${pid}`);
+      // Use execFileSync with an argument array to avoid shell injection.
+      execFileSync('taskkill', ['/F', '/PID', String(pidNum)]);
     } else {
-      execSync(`kill -9 ${pid}`);
+      // Use process.kill() directly – no shell involved.
+      process.kill(pidNum, 'SIGKILL');
     }
-    res.json({ success: true, pid });
+    res.json({ success: true, pid: pidNum });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -177,7 +254,9 @@ app.post('/api/kill', (req, res) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+// Bind to 127.0.0.1 only so the API is not reachable from other machines
+// on the network – reducing the attack surface and preventing remote detection.
+app.listen(PORT, '127.0.0.1', () => {
   console.log(`[SensorGuard] Scanner backend running → http://localhost:${PORT}`);
   console.log(`[SensorGuard] Platform: ${process.platform}`);
   console.log(`[SensorGuard] Endpoints:`);
