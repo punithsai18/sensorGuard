@@ -258,7 +258,10 @@ function App() {
         if (stRes.ok) setScreenTimeSummary(await stRes.json());
         if (tlRes.ok) {
             const tlData = await tlRes.json();
-            setTimelineSummary((tlData.events || []).slice(0, 5));
+            const usbOnly = (tlData.events || []).filter(e => 
+                e.event_source && e.event_source.toLowerCase() === 'usb'
+            );
+            setTimelineSummary(usbOnly.slice(0, 5));
         }
       } catch (e) {
         console.error("Failed to fetch summaries:", e);

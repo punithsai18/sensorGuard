@@ -138,13 +138,25 @@ def check_network():
 
 def check_usb():
     if wmi_obj is None: return {"status": "IDLE", "info": "—"}
-    # For a real-time looping script without WMI async events, we just grab current disk count
     try:
-        disks = wmi_obj.Win32_DiskDrive(InterfaceType="USB")
-        if len(disks) > 0:
-             return {"status": "ACTIVE", "info": f"Detected {len(disks)} USB drive(s)"}
-    except:
-        pass
+        # Look for all PNP entities that are USB devices
+        # We filter for common meaningful devices and skip generic hubs/controllers
+        devices = wmi_obj.Win32_PnPEntity()
+        usb_devs = []
+        for d in devices:
+            if d.DeviceID and d.DeviceID.startswith('USB\\'):
+                name = d.Caption or d.Name or "Unknown USB Device"
+                # Filter out generic infrastructure
+                skip = ["hub", "controller", "composite", "root", "extensible"]
+                if not any(s in name.lower() for s in skip):
+                    usb_devs.append(name)
+        
+        if usb_devs:
+            # Sort and unique
+            unique_devs = sorted(list(set(usb_devs)))
+            return {"status": "ACTIVE", "info": ", ".join(unique_devs)}
+    except Exception as e:
+        logger.error(f"USB detection error: {e}")
         
     return {"status": "IDLE", "info": "—"}
 
