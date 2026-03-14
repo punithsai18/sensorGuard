@@ -18,8 +18,8 @@ def main():
         os.close(fd)
         shutil.copy2(db_path, tmp)
         
-        # Connect to the temp db using built-in sqlite3
-        conn = sqlite3.connect(tmp)
+        # Connect to the temp db using built-in sqlite3 in read-only mode
+        conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
         
         # Set text factory to bytes or string to handle unicode safely
         conn.text_factory = str

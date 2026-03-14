@@ -100,7 +100,7 @@ def query_history(browser_name, db_path):
         os.close(fd)
         shutil.copy2(db_path, tmp)
         
-        conn = sqlite3.connect(tmp)
+        conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         
         if browser_name == "Firefox":
