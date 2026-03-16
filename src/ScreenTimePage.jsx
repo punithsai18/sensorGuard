@@ -15,6 +15,144 @@ export default function ScreenTimePage() {
     const [dailyGoalMinutes, setDailyGoalMinutes] = useState(120); // 2 hours default
     const [isEditingGoal, setIsEditingGoal] = useState(false);
 
+    // PART 2 & 3 & 4: REST CHART STATE
+    const [viewMode, setViewMode] = useState('1D');
+    const [chartData, setChartData] = useState([]);
+    const [chartSummary, setChartSummary] = useState([]);
+    const [tooltip, setTooltip] = useState(null);
+
+    const appColorsFixed = {
+        'Google Chrome': '#4285F4',
+        'VS Code': '#007ACC',
+        'File Explorer': '#FFA500',
+        'Other': '#888888'
+    };
+
+    const top5Names = useMemo(() => {
+        return chartSummary.slice(0, 5).map(s => s.name);
+    }, [chartSummary]);
+
+    const getChartAppColor = (appName) => {
+        if (appColorsFixed[appName]) return appColorsFixed[appName];
+        if (!top5Names.includes(appName)) return '#888888';
+        const dynamicColors = ['#10b981', '#8b5cf6', '#f43f5e', '#0ea5e9', '#f59e0b'];
+        let assigned = 0;
+        for (const name of top5Names) {
+            if (name === appName) break;
+            if (!appColorsFixed[name]) assigned++;
+        }
+        return dynamicColors[assigned % dynamicColors.length];
+    };
+
+    const localDateStr = (dateObj) => {
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dateObj.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    };
+
+    useEffect(() => {
+        const fetchChartData = async () => {
+            try {
+                const daysCount = viewMode === '1D' ? 1 : viewMode === '3D' ? 3 : 7;
+                const res = await fetch(`http://localhost:3005/api/screentime/history?days=${daysCount}`);
+                const json = await res.json();
+                setChartData(json.days || []);
+                setChartSummary(json.summary || []);
+            } catch (err) {
+                console.error("Failed to load chart data", err);
+            }
+        };
+
+        fetchChartData();
+
+        const interval = setInterval(() => {
+            fetchChartData();
+        }, 60000);
+
+        return () => clearInterval(interval);
+    }, [viewMode]);
+
+    const W = 800;   
+    const H = 200;   
+    const PADDING = 25;
+
+    const maxY = Math.max(60, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60))); 
+
+    const daysCount = viewMode === '1D' ? 1 : viewMode === '3D' ? 3 : 7;
+    const numCols = daysCount;
+    const colWidth = (W - PADDING * 2) / numCols;
+    const gap = Math.min(colWidth * 0.2, 40); // cap gap width so 1D doesn't look ridiculous
+    const barW = colWidth - gap;
+
+    const todayAtMidnight = new Date();
+    const labels = Array.from({length: daysCount}, (_, i) => {
+        const diffIdx = daysCount - 1 - i;
+        const d = new Date(todayAtMidnight.getTime() - diffIdx * 24 * 60 * 60 * 1000);
+        const dateStr = localDateStr(d);
+        return {
+            index: i,
+            label: diffIdx === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }),
+            data: chartData.find(cd => cd.date === dateStr)
+        };
+    });
+
+    const renderBars = () => {
+        return labels.map((col, i) => {
+            const x = PADDING + i * colWidth + gap / 2;
+            if (!col.data || !col.data.apps || col.data.apps.length === 0) {
+                return (
+                    <rect key={`empty-${i}`} x={x} y={H - PADDING - 2} width={barW} height={2} fill="#334155" />
+                );
+            }
+
+            let yOffset = 0;
+            const appsInCol = col.data.apps;
+            const grouped = [];
+            let otherSecs = 0;
+
+            for (const a of appsInCol) {
+                if (top5Names.includes(a.name) || appColorsFixed[a.name]) {
+                    grouped.push(a);
+                } else {
+                    otherSecs += a.seconds;
+                }
+            }
+            if (otherSecs > 0) {
+                grouped.push({ name: 'Other', seconds: otherSecs });
+            }
+
+            return (
+                <g key={`col-${i}`}>
+                    {grouped.map((app, j) => {
+                        const mins = app.seconds / 60;
+                        const hBar = Math.max(2, (mins / Math.max(maxY, 1)) * (H - PADDING * 2));
+                        const yBar = H - PADDING - yOffset - hBar;
+                        yOffset += hBar;
+                        return (
+                            <rect 
+                                key={`part-${i}-${j}`} 
+                                x={x} y={yBar} width={barW} height={hBar} 
+                                fill={getChartAppColor(app.name)} 
+                                onMouseEnter={(e) => setTooltip({
+                                    x: e.clientX,
+                                    y: e.clientY - 20,
+                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.label})`
+                                })}
+                                onMouseMove={(e) => setTooltip({
+                                    x: e.clientX,
+                                    y: e.clientY - 20,
+                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.label})`
+                                })}
+                                onMouseLeave={() => setTooltip(null)}
+                            />
+                        );
+                    })}
+                </g>
+            );
+        });
+    };
+
     const exportToCSV = () => {
         const headers = ["Application", "Time Used (seconds)", "Last Seen"];
         const rows = screenTimeData.map(row => `${row.app},${row.time},${row.last_seen || ''}`);
@@ -228,53 +366,92 @@ export default function ScreenTimePage() {
                     </div>
 
                     <div className="st-date-nav">
-                        <button className="st-nav-btn">&larr;</button>
-                        <div className="st-current-date">
-                            <span>{new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}</span>
-                            <small>Today</small>
+                        <div className="st-view-toggle" style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '4px', borderRadius: '6px' }}>
+                            <button 
+                                onClick={() => setViewMode('1D')}
+                                style={{ padding: '6px 16px', background: viewMode === '1D' ? '#475569' : 'transparent', color: viewMode === '1D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                1D
+                            </button>
+                            <button 
+                                onClick={() => setViewMode('3D')}
+                                style={{ padding: '6px 16px', background: viewMode === '3D' ? '#475569' : 'transparent', color: viewMode === '3D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                3D
+                            </button>
+                            <button 
+                                onClick={() => setViewMode('7D')}
+                                style={{ padding: '6px 16px', background: viewMode === '7D' ? '#475569' : 'transparent', color: viewMode === '7D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                7D
+                            </button>
                         </div>
-                        <button className="st-nav-btn" disabled>&rarr;</button>
                     </div>
                 </div>
             </div>
 
             <div className="st-content-grid">
-                {/* Visual Chart Card */}
                 <div className="st-card st-chart-card">
                     <div className="st-card-header">
-                        <h3><span>📊</span> Activity Distribution</h3>
+                        <h3><span>📊</span> Activity Timeline</h3>
                     </div>
-                    <div className="st-chart-wrapper" style={{ display: 'flex', flexDirection: 'column', padding: '1rem', minHeight: '150px' }}>
-                        {totalSeconds === 0 ? (
-                            <div className="st-empty-state" style={{ margin: 'auto' }}>
-                                <p>No data recorded yet.</p>
+                    <div className="st-chart-wrapper" style={{ padding: '1rem', position: 'relative' }}>
+                        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
+                            {/* Y axis steps */}
+                            {[0, 0.5, 1].map(pct => {
+                                const yLine = H - PADDING - pct * (H - PADDING * 2);
+                                return (
+                                    <g key={`y-${pct}`}>
+                                        <line x1={PADDING} y1={yLine} x2={W - PADDING} y2={yLine} stroke="#334155" strokeDasharray="4 4" />
+                                        <text x={PADDING - 5} y={yLine + 4} fill="#64748b" fontSize="10" textAnchor="end">{Math.round(pct * maxY)}m</text>
+                                    </g>
+                                );
+                            })}
+                            
+                            {/* Bars */}
+                            {renderBars()}
+
+                            {/* X axis labels */}
+                            {labels.map((col, i) => col.label ? (
+                                <text key={`x-${i}`} x={PADDING + i * colWidth + gap / 2 + barW / 2} y={H - 2} fill="#64748b" fontSize="10" textAnchor="middle">
+                                    {col.label}
+                                </text>
+                            ) : null)}
+                        </svg>
+
+                        {tooltip && (
+                            <div style={{ position: 'fixed', left: tooltip.x, top: tooltip.y, transform: 'translate(-50%, -100%)', background: '#1e293b', padding: '6px 10px', borderRadius: '4px', fontSize: '12px', color: 'white', pointerEvents: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', zIndex: 9999 }}>
+                                {tooltip.content}
                             </div>
-                        ) : (
-                            <>
-                                <div style={{ display: 'flex', width: '100%', height: '40px', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#334155' }}>
-                                    {sortedApps.map(([appName, time]) => {
-                                        const percent = (time / totalSeconds) * 100;
-                                        if (percent < 0.5) return null; // Too small to render cleanly
-                                        return (
-                                            <div
-                                                key={appName}
-                                                style={{ width: `${percent}%`, height: '100%', backgroundColor: stringToColor(appName), borderRight: '1px solid rgba(0,0,0,0.2)', position: 'relative' }}
-                                                title={`${appName}: ${formatTime(time)} (${percent.toFixed(1)}%)`}
-                                            />
-                                        );
-                                    })}
-                                </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
-                                    {sortedApps.slice(0, 8).map(([appName, time]) => (
-                                        <div key={appName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: stringToColor(appName) }}></div>
-                                            <span style={{ color: '#e2e8f0' }}>{appName}</span>
-                                            <span style={{ color: '#94a3b8' }}>{Math.round((time / totalSeconds) * 100)}%</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            </>
                         )}
+
+                        {/* Chart Legend */}
+                        <div className="st-chart-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
+                            {top5Names.map(name => {
+                                const sumData = chartSummary.find(s => s.name === name);
+                                if (!sumData) return null;
+                                const h = Math.floor(sumData.total_seconds / 3600);
+                                const m = Math.floor((sumData.total_seconds % 3600) / 60);
+                                return (
+                                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: getChartAppColor(name) }}></div>
+                                        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>{name}</span>
+                                        <span style={{ color: '#94a3b8' }}>{h}h {m}m ({sumData.percentage}%)</span>
+                                    </div>
+                                );
+                            })}
+                            
+                            {chartSummary.filter(s => !top5Names.includes(s.name)).length > 0 && (() => {
+                                const otherSum = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.total_seconds, 0);
+                                const otherPct = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.percentage, 0);
+                                const h = Math.floor(otherSum / 3600);
+                                const m = Math.floor((otherSum % 3600) / 60);
+                                return (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: '#888888' }}></div>
+                                        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>Other</span>
+                                        <span style={{ color: '#94a3b8' }}>{h}h {m}m ({otherPct}%)</span>
+                                    </div>
+                                );
+                            })()}
+                        </div>
                     </div>
                 </div>
 

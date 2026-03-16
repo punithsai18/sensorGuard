@@ -109,57 +109,85 @@ app.get('/api/tabs', (_req, res) => {
 
 // ── Screen Time ───────────────────────────────────────────────────────────────
 
-app.get('/api/screentime', (req, res) => {
+app.get('/api/screentime/history', (req, res) => {
   try {
     const sqlite3 = require('sqlite3').verbose();
     const path = require('path');
     const dbPath = path.join(__dirname, '..', 'screen_time.db');
 
-    // Note: Python sqlite3 built-in handles locking better, but Node sqlite3 works for simple reads.
     const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
       if (err) return res.status(500).json({ error: 'DB not found', details: err.message });
 
-      const targetDate = req.query.date || new Date().toISOString().split('T')[0];
+      const daysCount = parseInt(req.query.days) || 7;
+      // Start date is N-1 days ago (if days=1, start=today)
+      const defaultStart = new Date(Date.now() - (daysCount - 1) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const targetDate = defaultStart;
 
-      db.all("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", [targetDate], (err, rows) => {
+      const query = `
+        SELECT 
+          date as group_date,
+          app_name,
+          total_seconds as total
+        FROM screen_time_sessions
+        WHERE date >= ?
+        ORDER BY group_date ASC, total DESC
+      `;
+
+      db.all(query, [targetDate], (err, rows) => {
         db.close();
 
         if (err) return res.status(500).json({ error: 'DB read error', details: err.message });
 
-        let total = 0;
-        const apps = {};
+        const daysMap = {};
+        const summaryMap = {};
+        let totalRangeSeconds = 0;
 
         for (const row of rows) {
-          total += row.total_seconds;
+          const d = row.group_date;
+          if (!d) continue;
 
-          let name = row.app_name;
-          let domain = null;
-          if (name.includes('::')) {
-            const parts = name.split('::');
-            name = parts[0];
-            domain = parts[1];
+          let app = row.app_name;
+          // Normalize domains to parent if they have "::"
+          if (app.includes('::')) {
+            app = app.split('::')[0];
           }
+          
+          const total = row.total;
 
-          if (!apps[name]) apps[name] = { name, seconds: 0, percent: 0, domains: [] };
-
-          if (!domain) {
-            apps[name].seconds += row.total_seconds;
-          } else {
-            apps[name].seconds += row.total_seconds;
-            apps[name].domains.push({ domain, seconds: row.total_seconds });
+          if (!daysMap[d]) {
+            daysMap[d] = { date: d, apps: {}, total_seconds: 0 };
           }
+          
+          if (!daysMap[d].apps[app]) {
+            daysMap[d].apps[app] = { name: app, seconds: 0 };
+          }
+          daysMap[d].apps[app].seconds += total;
+          daysMap[d].total_seconds += total;
+
+          if (!summaryMap[app]) {
+            summaryMap[app] = { name: app, total_seconds: 0, percentage: 0 };
+          }
+          summaryMap[app].total_seconds += total;
+          totalRangeSeconds += total;
         }
 
-        const finalApps = Object.values(apps).map(a => {
-          a.percent = total > 0 ? ((a.seconds / total) * 100).toFixed(1) : 0;
-          a.domains.sort((x, y) => y.seconds - x.seconds);
-          return a;
-        }).sort((x, y) => y.seconds - x.seconds);
+        // Convert the apps object to an array for each day
+        const days = Object.values(daysMap).map(day => {
+          day.apps = Object.values(day.apps).sort((a, b) => b.seconds - a.seconds);
+          return day;
+        }).sort((a, b) => a.date.localeCompare(b.date));
+
+        const summary = Object.values(summaryMap)
+          .sort((a, b) => b.total_seconds - a.total_seconds)
+          .map(app => {
+            app.percentage = totalRangeSeconds > 0 ? Math.round((app.total_seconds / totalRangeSeconds) * 100) : 0;
+            return app;
+          });
 
         res.json({
-          date: targetDate,
-          total_seconds: total,
-          apps: finalApps
+          start: targetDate,
+          days,
+          summary
         });
       });
     });
