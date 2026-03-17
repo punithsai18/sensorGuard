@@ -58,6 +58,8 @@ app.use(helmet({
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
   'http://localhost:3005',
   'http://127.0.0.1:3005',
 ];
@@ -284,11 +286,20 @@ app.post('/api/kill', (req, res) => {
 
 // Bind to 127.0.0.1 only so the API is not reachable from other machines
 // on the network – reducing the attack surface and preventing remote detection.
-app.listen(PORT, '127.0.0.1', () => {
+const server = app.listen(PORT, '127.0.0.1', () => {
   console.log(`[SensorGuard] Scanner backend running → http://localhost:${PORT}`);
   console.log(`[SensorGuard] Platform: ${process.platform}`);
   console.log(`[SensorGuard] Endpoints:`);
   console.log(`  GET /api/health`);
   console.log(`  GET /api/tabs`);
   console.log(`  GET /api/scan/all`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[SensorGuard] ERROR: Port ${PORT} is already in use.`);
+    console.error(`[SensorGuard] Run: npx kill-port ${PORT}  OR  netstat -ano | findstr :${PORT}  to find and kill the process.`);
+    process.exit(1);
+  }
+  throw err;
 });

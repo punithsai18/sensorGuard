@@ -12,9 +12,11 @@ from watchdog.events import FileSystemEventHandler
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BrowserMonitor")
+
 
 # 1. BROWSER_PROFILES dictionary mapping browser name to list of possible history db paths
 BROWSER_PROFILES = {
@@ -208,7 +210,8 @@ async def push_browser_data(browser_name, target_clients=None):
         status = "info"
     else:
         try:
-            tabs = query_history(browser_name, db_path)
+            # Query history is a heavy operation (copying file + sqlite query)
+            tabs = await asyncio.to_thread(query_history, browser_name, db_path)
             if not tabs:
                 error = f"No recent tabs found in {browser_name}."
                 status = "info"
@@ -237,9 +240,19 @@ async def process_event(browser_name):
     await asyncio.sleep(0.1)
     await push_browser_data(browser_name)
 
-def update_watchers(loop):
+async def periodic_scan():
+    loop = asyncio.get_running_loop()
+    # Initial scan
+    new_detected = await asyncio.to_thread(scan_browsers)
+    await update_watchers_async(loop, new_detected)
+    
+    while True:
+        await asyncio.sleep(60)
+        new_detected = await asyncio.to_thread(scan_browsers)
+        await update_watchers_async(loop, new_detected)
+
+async def update_watchers_async(loop, new_detected):
     global DETECTED_BROWSERS, browser_handlers
-    new_detected = scan_browsers()
     changed = False
     
     for name, path in new_detected.items():
@@ -253,16 +266,9 @@ def update_watchers(loop):
             logger.info(f"Started watching {name} at {path}")
             
     if changed:
-        asyncio.run_coroutine_threadsafe(push_detected_browsers(), loop)
+        await push_detected_browsers()
         for name in DETECTED_BROWSERS:
-            asyncio.run_coroutine_threadsafe(push_browser_data(name), loop)
-
-async def periodic_scan():
-    loop = asyncio.get_running_loop()
-    update_watchers(loop)
-    while True:
-        await asyncio.sleep(60)
-        update_watchers(loop)
+            await push_browser_data(name)
 
 async def check_new_processes():
     loop = asyncio.get_running_loop()
@@ -270,12 +276,14 @@ async def check_new_processes():
     browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc']
     while True:
         try:
-            for p in psutil.process_iter(['name']):
-                if p.pid not in seen_pids:
-                    seen_pids.add(p.pid)
-                    name = (p.info['name'] or '').lower()
+            # Iterating over processes can be slow
+            process_info = await asyncio.to_thread(lambda: [(p.pid, (p.info['name'] or '').lower()) for p in psutil.process_iter(['name'])])
+            for pid, name in process_info:
+                if pid not in seen_pids:
+                    seen_pids.add(pid)
                     if any(b in name for b in browsers):
-                        update_watchers(loop)
+                        new_detected = await asyncio.to_thread(scan_browsers)
+                        await update_watchers_async(loop, new_detected)
         except Exception:
             pass
         await asyncio.sleep(5)
@@ -307,6 +315,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8999)
     # Use 127.0.0.1 to match what the frontend is now calling
     async with websockets.serve(register, "127.0.0.1", 8999, process_request=process_request):
         logger.info("Browser Monitor WebSocket active on ws://127.0.0.1:8999/browser-monitor")

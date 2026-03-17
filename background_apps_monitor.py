@@ -5,6 +5,7 @@ import psutil
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
 
 try:
     import ctypes
@@ -16,6 +17,7 @@ except Exception:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BackgroundAppsMonitor")
+
 
 clients = set()
 
@@ -100,7 +102,7 @@ async def broadcast_apps_loop():
             continue
             
         try:
-            apps = get_running_apps()
+            apps = await asyncio.to_thread(get_running_apps)
             msg = json.dumps({"event": "background_apps", "apps": apps})
         except Exception as e:
             logger.error(f"Error getting background apps: {e}")
@@ -116,11 +118,14 @@ async def register(websocket):
     clients.add(websocket)
     try:
         # Push initial data immediately
-        apps = get_running_apps()
+        apps = await asyncio.to_thread(get_running_apps)
         await websocket.send(json.dumps({"event": "background_apps", "apps": apps}))
         await websocket.wait_closed()
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
 
 async def main():
     asyncio.create_task(broadcast_apps_loop())
@@ -135,6 +140,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8997)
     # Host on 8997
     async with websockets.serve(register, "127.0.0.1", 8997, process_request=process_request):
         logger.info("Background Apps Monitor running on ws://127.0.0.1:8997")

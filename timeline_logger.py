@@ -1,10 +1,14 @@
 import sqlite3
 import os
 import logging
+import psutil
 from datetime import datetime
+from port_utils import kill_port_holder
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "screen_time.db")
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TimelineLogger")
+
 
 def init_db():
     try:
@@ -59,6 +63,7 @@ async def main():
             return Response(200, "OK", Headers([("Content-Type", "text/html"), ("Connection", "close")]), b"Timeline Logger Active")
         return None
 
+    await asyncio.to_thread(kill_port_holder, 9000)
     async with websockets.serve(register, "127.0.0.1", 9000, process_request=process_request):
         logger.info("Timeline Logger service running on ws://127.0.0.1:9000")
         await asyncio.Future()

@@ -6,6 +6,7 @@ import time
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
 
 try:
     from timeline_logger import log_event
@@ -23,51 +24,48 @@ except Exception:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("SensorDetector")
 
+
 clients = set()
+LATEST_SENSORS = {k: {"status": "IDLE", "info": "—"} for k in ["location", "clipboard", "screen_capture", "keyboard", "network", "usb", "camera", "microphone"]}
 
-# WMI connection for USB (import deferred as it's Windows only and might fail)
-try:
-    import wmi
-    wmi_obj = wmi.WMI()
-except Exception:
-    wmi_obj = None
+# Deferred imports and setup
 
-last_clipboard_seq = 0
-if IS_WINDOWS:
-    last_clipboard_seq = user32.GetClipboardSequenceNumber()
+def run_powershell(script):
+    import subprocess
+    try:
+        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", script], encoding='utf8', timeout=4)
+        return output
+    except Exception:
+        return ""
 
 def get_location_access():
     if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
-    # Simplified approach for Location: check the registry like camera/mic
-    import subprocess
     ps = r"""
     $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location';
     $active = @();
-    Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.PSChildName -eq 'NonPackaged') {
-            Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+    if (Test-Path $base) {
+        Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.PSChildName -eq 'NonPackaged') {
+                Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+                    $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+                    if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                        $active += ($_.PSChildName).Replace('#','\\')
+                    }
+                }
+            } else {
                 $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
                 if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                    $active += ($_.PSChildName).Replace('#','\\')
+                    $active += $_.PSChildName
                 }
             }
-        } else {
-            $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
-            if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                $active += $_.PSChildName
-            }
-        }
-    };
+        };
+    }
     $active | Select-Object -Unique
     """
-    try:
-        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], encoding='utf8', timeout=5)
-        procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
-        if procs:
-            return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
-        return {"status": "IDLE", "info": "—"}
-    except Exception:
-        pass
+    output = run_powershell(ps)
+    procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
+    if procs:
+        return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
     return {"status": "IDLE", "info": "—"}
 
 
@@ -137,148 +135,157 @@ def check_network():
     return {"status": "IDLE", "info": "—"}
 
 def check_usb():
-    if wmi_obj is None: return {"status": "IDLE", "info": "—"}
+    """Detect USB devices via PowerShell to avoid COM/WMI threading issues."""
+    if not IS_WINDOWS:
+        return {"status": "IDLE", "info": "—"}
     try:
-        # Look for all PNP entities that are USB devices
-        # We filter for common meaningful devices and skip generic hubs/controllers
-        devices = wmi_obj.Win32_PnPEntity()
-        usb_devs = []
-        for d in devices:
-            if d.DeviceID and d.DeviceID.startswith('USB\\'):
-                name = d.Caption or d.Name or "Unknown USB Device"
-                # Filter out generic infrastructure
-                skip = ["hub", "controller", "composite", "root", "extensible"]
-                if not any(s in name.lower() for s in skip):
-                    usb_devs.append(name)
-        
-        if usb_devs:
-            # Sort and unique
-            unique_devs = sorted(list(set(usb_devs)))
-            return {"status": "ACTIVE", "info": ", ".join(unique_devs)}
+        ps = r"""
+        $skip = 'hub|controller|composite|root|extensible'
+        Get-WmiObject Win32_PnPEntity | Where-Object { $_.DeviceID -like 'USB\*' -and $_.Caption -notmatch $skip } |
+          Select-Object -ExpandProperty Caption -Unique | Sort-Object
+        """
+        output = run_powershell(ps)
+        devs = [d.strip() for d in output.strip().split('\n') if d.strip()]
+        if devs:
+            return {"status": "ACTIVE", "info": ", ".join(devs)}
     except Exception as e:
         logger.error(f"USB detection error: {e}")
-        
+
     return {"status": "IDLE", "info": "—"}
 
 def check_camera():
     if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
-    import subprocess
     ps = r"""
     $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\webcam';
     $active = @();
-    Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.PSChildName -eq 'NonPackaged') {
-            Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+    if (Test-Path $base) {
+        Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.PSChildName -eq 'NonPackaged') {
+                Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+                    $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+                    if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                        $active += ($_.PSChildName).Replace('#','\\')
+                    }
+                }
+            } else {
                 $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
                 if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                    $active += ($_.PSChildName).Replace('#','\\')
+                    $active += $_.PSChildName
                 }
             }
-        } else {
-            $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
-            if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                $active += $_.PSChildName
-            }
-        }
-    };
+        };
+    }
     $active | Select-Object -Unique
     """
-    try:
-        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], encoding='utf8', timeout=5)
-        procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
-        if procs:
-            return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
-    except: pass
+    output = run_powershell(ps)
+    procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
+    if procs:
+        return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
     return {"status": "IDLE", "info": "—"}
 
 def check_microphone():
     if not IS_WINDOWS: return {"status": "IDLE", "info": "—"}
-    import subprocess
     ps = r"""
     $base = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone';
     $active = @();
-    Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
-        if ($_.PSChildName -eq 'NonPackaged') {
-            Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+    if (Test-Path $base) {
+        Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+            if ($_.PSChildName -eq 'NonPackaged') {
+                Get-ChildItem $_.PsPath -ErrorAction SilentlyContinue | ForEach-Object {
+                    $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
+                    if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
+                        $active += ($_.PSChildName).Replace('#','\\')
+                    }
+                }
+            } else {
                 $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
                 if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                    $active += ($_.PSChildName).Replace('#','\\')
+                    $active += $_.PSChildName
                 }
             }
-        } else {
-            $v = Get-ItemProperty $_.PsPath -ErrorAction SilentlyContinue;
-            if ($v.LastUsedTimeStart -and $v.LastUsedTimeStart -ne 0 -and $v.LastUsedTimeStop -eq 0) {
-                $active += $_.PSChildName
-            }
-        }
-    };
+        };
+    }
     $active | Select-Object -Unique
     """
-    try:
-        output = subprocess.check_output(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], encoding='utf8', timeout=5)
-        procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
-        if procs:
-            return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
-    except: pass
+    output = run_powershell(ps)
+    procs = [p.strip() for p in output.strip().split('\n') if p.strip()]
+    if procs:
+        return {"status": "ACTIVE", "info": f"Active: {', '.join(procs)}"}
     return {"status": "IDLE", "info": "—"}
 
 
-def gather_sensors():
+async def gather_sensors():
+    # Run all synchronous checks in threads concurrently
+    tasks = [
+        asyncio.to_thread(get_location_access),
+        asyncio.to_thread(check_clipboard),
+        asyncio.to_thread(check_screen_capture),
+        asyncio.to_thread(check_keyboard_hooks),
+        asyncio.to_thread(check_network),
+        asyncio.to_thread(check_usb),
+        asyncio.to_thread(check_camera),
+        asyncio.to_thread(check_microphone)
+    ]
+    results = await asyncio.gather(*tasks)
     return {
-        "location": get_location_access(),
-        "clipboard": check_clipboard(),
-        "screen_capture": check_screen_capture(),
-        "keyboard": check_keyboard_hooks(),
-        "network": check_network(),
-        "usb": check_usb(),
-        "camera": check_camera(),
-        "microphone": check_microphone()
+        "location": results[0],
+        "clipboard": results[1],
+        "screen_capture": results[2],
+        "keyboard": results[3],
+        "network": results[4],
+        "usb": results[5],
+        "camera": results[6],
+        "microphone": results[7]
     }
 
-async def broadcast_loop():
-    # Cache the accessed states so they don't immediately disappear
+last_clipboard_seq = 0
+if IS_WINDOWS:
     try:
-        cached = gather_sensors()
+        last_clipboard_seq = user32.GetClipboardSequenceNumber()
+    except: pass
+
+async def broadcast_loop():
+    global LATEST_SENSORS
+    # Initial gather to populate cache
+    try:
+        LATEST_SENSORS = await gather_sensors()
     except Exception as e:
         logger.error(f"Initial gather_sensors failed: {e}")
-        cached = {k: {"status": "IDLE", "info": "—"} for k in ["location", "clipboard", "screen_capture", "keyboard", "network", "usb", "camera", "microphone"]}
     
     while True:
         await asyncio.sleep(2)
-        if not clients: continue
         
         try:
-            current = gather_sensors()
+            # We stagger the checks slightly to avoid massive CPU spikes from multiple PowerShell calls
+            # However, gather_sensors is already concurrent. We'll stick to one clean update per loop.
+            current = await gather_sensors()
         except Exception as e:
             logger.error(f"Error gathering sensors: {e}")
             continue
         
-        # Merge logic for volatile states like clipboard accessed so it flashes for a few seconds
+        # Merge logic for volatile states like clipboard
         for k in ["clipboard", "keyboard"]:
             if current[k]["status"] != "IDLE":
-                cached[k] = current[k]
-                cached[k]["_expire"] = time.time() + 5 # keep for 5 seconds
+                LATEST_SENSORS[k] = current[k]
+                LATEST_SENSORS[k]["_expire"] = time.time() + 5
             else:
-                if "_expire" in cached[k]:
-                    if time.time() > cached[k]["_expire"]:
-                        cached[k] = {"status": "IDLE", "info": "—"}
+                if "_expire" in LATEST_SENSORS[k]:
+                    if time.time() > LATEST_SENSORS[k]["_expire"]:
+                        LATEST_SENSORS[k] = {"status": "IDLE", "info": "—"}
                 else:
-                    cached[k] = {"status": "IDLE", "info": "—"}
+                    LATEST_SENSORS[k] = {"status": "IDLE", "info": "—"}
             
-            # Log volatile states to timeline when they happen
             if current[k]["status"] != "IDLE":
                 if k == "clipboard":
-                    log_event("HARDWARE", "Clipboard", current[k]["info"])
+                    asyncio.create_task(asyncio.to_thread(log_event, "HARDWARE", "Clipboard", current[k]["info"]))
                 elif k == "keyboard":
-                    log_event("HARDWARE", "Keyboard", current[k]["info"])
+                    asyncio.create_task(asyncio.to_thread(log_event, "HARDWARE", "Keyboard", current[k]["info"]))
 
-        # update the rest directly
+        # Update the rest directly and check for timeline events
         for k in ["location", "screen_capture", "network", "usb", "camera", "microphone"]:
-            
-            # Special check for sensor activation events for timeline logging
-            old_status = cached.get(k, {}).get("status", "IDLE")
+            old_status = LATEST_SENSORS.get(k, {}).get("status", "IDLE")
             new_status = current.get(k, {}).get("status", "IDLE")
-            old_info = cached.get(k, {}).get("info", "")
+            old_info = LATEST_SENSORS.get(k, {}).get("info", "")
             new_info = current.get(k, {}).get("info", "")
             
             if old_status != new_status or (new_status != "IDLE" and old_info != new_info):
@@ -286,15 +293,16 @@ async def broadcast_loop():
                 if k in ["camera", "microphone"]: event_type = k.upper()
                 if k == "location": event_type = "SYSTEM"
                 
-                # Log activation/change to timeline
                 if new_status != "IDLE":
-                    log_event(event_type, k.capitalize(), new_info)
+                    asyncio.create_task(asyncio.to_thread(log_event, event_type, k.capitalize(), new_info))
                 elif old_status != "IDLE":
-                    log_event(event_type, k.capitalize(), f"Access stopped")
+                    asyncio.create_task(asyncio.to_thread(log_event, event_type, k.capitalize(), f"Access stopped"))
 
-            cached[k] = current[k]
+            LATEST_SENSORS[k] = current[k]
                 
-        msg = json.dumps({"event": "sensors_update", "sensors": cached})
+        if not clients: continue
+        
+        msg = json.dumps({"event": "sensors_update", "sensors": LATEST_SENSORS})
         for ws in list(clients):
             try:
                 await ws.send(msg)
@@ -305,10 +313,14 @@ async def broadcast_loop():
 async def register(websocket):
     clients.add(websocket)
     try:
-        await websocket.send(json.dumps({"event": "sensors_update", "sensors": gather_sensors()}))
+        # Send cache immediately so handshake completes instantly
+        await websocket.send(json.dumps({"event": "sensors_update", "sensors": LATEST_SENSORS}))
         await websocket.wait_closed()
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
 
 async def main():
     asyncio.create_task(broadcast_loop())
@@ -323,6 +335,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8996)
     async with websockets.serve(register, "127.0.0.1", 8996, process_request=process_request):
         logger.info("Advanced Sensors Detector running on ws://127.0.0.1:8996")
         await asyncio.Future()

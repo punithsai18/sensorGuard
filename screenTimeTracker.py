@@ -12,6 +12,7 @@ from watchdog.events import FileSystemEventHandler
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
 
 try:
     from timeline_logger import log_event
@@ -86,6 +87,10 @@ BROWSER_PREFS = {
 }
 
 clients = set()
+last_db_write = time.time()
+last_active_app = None
+LATEST_DATA = {"event": "screen_time", "date": datetime.now().strftime("%Y-%m-%d"), "data": []}
+
 
 # WATCHDOG FOR PREFERENCES
 class PrefsFileHandler(FileSystemEventHandler):
@@ -188,16 +193,15 @@ def get_website_from_title(app_name, title):
     return None
 
 screen_time_buffer = {}
-last_db_write = time.time()
-last_active_app = None
-
-def flush_screen_time_buffer():
+def flush_screen_time_buffer_sync():
     if not screen_time_buffer:
         return
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        for (date, app_name), data in list(screen_time_buffer.items()):
+        # Create a copy to avoid mutation during threading if called from elsewhere
+        current_items = list(screen_time_buffer.items())
+        for (date, app_name), data in current_items:
             cursor.execute("""
                 INSERT INTO screen_time_sessions (date, app_name, total_seconds, last_seen)
                 VALUES (?, ?, ?, ?)
@@ -207,24 +211,29 @@ def flush_screen_time_buffer():
             """, (date, app_name, data["seconds"], data["last_seen"], data["seconds"], data["last_seen"]))
         conn.commit()
         conn.close()
-        screen_time_buffer.clear()
+        # Only clear what we just wrote
+        for key, _ in current_items:
+            if key in screen_time_buffer:
+                del screen_time_buffer[key]
     except Exception as e:
         logger.error(f"Error storing screen time: {e}")
 
 async def screen_time_loop():
-    global last_db_write, last_active_app
+    global last_db_write, last_active_app, LATEST_DATA
     while True:
         await asyncio.sleep(1)
-        idle_time = get_idle_time_windows() if IS_WINDOWS else 0
+        # Use to_thread for the blocking OS calls
+        idle_time = await asyncio.to_thread(get_idle_time_windows) if IS_WINDOWS else 0
         if idle_time > 60:
             if last_active_app:
                 # User went idle
-                log_event("SYSTEM", "User State", "User is now idle")
+                asyncio.create_task(asyncio.to_thread(log_event, "SYSTEM", "User State", "User is now idle"))
                 last_active_app = None
             continue  # User is idle, don't count
             
-        app_exe, title, pid = get_active_window_info()
-        if not app_exe: continue
+        res = await asyncio.to_thread(get_active_window_info)
+        if not res or not res[0]: continue
+        app_exe, title, pid = res
         
         app_name = clean_app_name(app_exe, title)
         website = get_website_from_title(app_name, title)
@@ -236,7 +245,7 @@ async def screen_time_loop():
         # Log focus change to timeline
         current_focus = record_name if not website else f"{app_name} ({website})"
         if current_focus != last_active_app:
-            log_event("APP", app_name, f"Focused on: {title or app_name}")
+            asyncio.create_task(asyncio.to_thread(log_event, "APP", app_name, f"Focused on: {title or app_name}"))
             last_active_app = current_focus
 
         today = datetime.now().strftime("%Y-%m-%d")
@@ -251,25 +260,33 @@ async def screen_time_loop():
         
         # Write to database periodically
         if time.time() - last_db_write >= 15:
-            flush_screen_time_buffer()
+            await asyncio.to_thread(flush_screen_time_buffer_sync)
+            # Update cache after flush
+            today, data = await asyncio.to_thread(get_screen_time_data_sync)
+            LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
             last_db_write = time.time()
 
+def get_screen_time_data_sync():
+    conn = sqlite3.connect(DB_PATH)
+    today = datetime.now().strftime("%Y-%m-%d")
+    rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
+    data = [{"app": r[0], "time": r[1], "last_seen": r[2]} for r in rows]
+    conn.close()
+    return today, data
+
 async def push_screen_time():
+    global LATEST_DATA
+    # Initial load of cache
+    today, data = await asyncio.to_thread(get_screen_time_data_sync)
+    LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
+    
     while True:
         await asyncio.sleep(60)
-        flush_screen_time_buffer() # Ensure latest data is written before read
+        await asyncio.to_thread(flush_screen_time_buffer_sync)
+        today, data = await asyncio.to_thread(get_screen_time_data_sync)
+        LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
         
-        conn = sqlite3.connect(DB_PATH)
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
-        
-        data = []
-        for r in rows:
-            data.append({"app": r[0], "time": r[1], "last_seen": r[2]})
-            
-        conn.close()
-        
-        msg = json.dumps({"event": "screen_time", "date": today, "data": data})
+        msg = json.dumps(LATEST_DATA)
         for ws in list(clients):
             try: await ws.send(msg)
             except: pass
@@ -277,18 +294,14 @@ async def push_screen_time():
 async def register(websocket):
     clients.add(websocket)
     try:
-        # Push initial screen time
-        flush_screen_time_buffer()
-        conn = sqlite3.connect(DB_PATH)
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
-        data = [{"app": r[0], "time": r[1], "last_seen": r[2]} for r in rows]
-        conn.close()
-        await websocket.send(json.dumps({"event": "screen_time", "date": today, "data": data}))
-        
+        # Push cached data instantly
+        await websocket.send(json.dumps(LATEST_DATA))
         await websocket.wait_closed()
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
 
 async def main():
     observer = Observer()
@@ -309,6 +322,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8998)
     async with websockets.serve(register, "127.0.0.1", 8998, process_request=process_request):
         logger.info("Screen Time Tracker running on ws://127.0.0.1:8998")
         await asyncio.Future()
