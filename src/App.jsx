@@ -368,8 +368,8 @@ function App() {
                     {formatDuration(screenTimeSummary.total_seconds)}
                 </div>
                 <p className="section-label">Top Applications</p>
-                {screenTimeSummary.apps.slice(0, 3).map((app, i) => (
-                    <DataRow key={i} label={app.name} value={formatDuration(app.seconds)} />
+                {(screenTimeSummary.summary || []).slice(0, 3).map((app, i) => (
+                    <DataRow key={i} label={app.name} value={formatDuration(app.total_seconds)} />
                 ))}
                 <button 
                   onClick={() => setPage('screen-time')}

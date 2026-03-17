@@ -111,87 +111,146 @@ app.get('/api/tabs', (_req, res) => {
 
 // ── Screen Time ───────────────────────────────────────────────────────────────
 
+app.get('/api/screentime', (req, res) => {
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const dbPath = path.join(__dirname, '..', 'screen_time.db');
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
+
+    const now = new Date();
+    const offset = now.getTimezoneOffset() * 60000;
+    const localISOTime = new Date(now - offset).toISOString();
+    const dateStr = req.query.date || localISOTime.split('T')[0];
+
+    // Query hourly aggregation
+    const sql = `
+      SELECT 
+        CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+        app_name,
+        SUM(duration_seconds) as seconds
+      FROM screen_time_sessions
+      WHERE date(timestamp) = ?
+      GROUP BY hour, app_name
+      ORDER BY hour ASC, seconds DESC
+    `;
+
+    db.all(sql, [dateStr], (err, rows) => {
+      db.close();
+      if (err) return res.status(500).json({ error: err.message });
+
+      // Initialize 24 hours
+      const hours = Array.from({ length: 24 }, (_, i) => ({
+        hour: i,
+        apps: [],
+        total_seconds: 0
+      }));
+
+      const summaryMap = {};
+      let totalDaySeconds = 0;
+
+      rows.forEach(row => {
+        const h = row.hour;
+        if (h >= 0 && h < 24) {
+          hours[h].apps.push({ name: row.app_name, seconds: row.seconds });
+          hours[h].total_seconds += row.seconds;
+        }
+        
+        // Use full app_name (including domain if present) for granular reporting
+        const baseApp = row.app_name.includes('::') ? row.app_name.split('::')[0] : row.app_name;
+        if (!summaryMap[baseApp]) summaryMap[baseApp] = 0;
+        summaryMap[baseApp] += row.seconds;
+        totalDaySeconds += row.seconds;
+      });
+
+      const summary = Object.entries(summaryMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, total]) => ({
+          name,
+          total_seconds: total,
+          percentage: totalDaySeconds > 0 ? Math.round((total / totalDaySeconds) * 100) : 0
+        }));
+
+      res.json({ date: dateStr, hours, summary });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/screentime/history', (req, res) => {
   try {
     const sqlite3 = require('sqlite3').verbose();
     const path = require('path');
     const dbPath = path.join(__dirname, '..', 'screen_time.db');
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY);
 
-    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READONLY, (err) => {
-      if (err) return res.status(500).json({ error: 'DB not found', details: err.message });
+    const daysCount = parseInt(req.query.days) || 7;
+    const now = new Date();
+    const startDateObj = new Date(now.getTime() - (daysCount - 1) * 24 * 60 * 60 * 1000);
+    const offset = startDateObj.getTimezoneOffset() * 60000;
+    const startDate = new Date(startDateObj.getTime() - offset).toISOString().split('T')[0];
 
-      const daysCount = parseInt(req.query.days) || 7;
-      // Start date is N-1 days ago (if days=1, start=today)
-      const defaultStart = new Date(Date.now() - (daysCount - 1) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const targetDate = defaultStart;
+    // Query daily aggregation
+    const sql = `
+      SELECT 
+        date(timestamp) as day,
+        app_name,
+        SUM(duration_seconds) as seconds
+      FROM screen_time_sessions
+      WHERE day >= ?
+      GROUP BY day, app_name
+      ORDER BY day ASC, seconds DESC
+    `;
 
-      const query = `
-        SELECT 
-          date as group_date,
-          app_name,
-          total_seconds as total
-        FROM screen_time_sessions
-        WHERE date >= ?
-        ORDER BY group_date ASC, total DESC
-      `;
+    db.all(sql, [startDate], (err, rows) => {
+      db.close();
+      if (err) return res.status(500).json({ error: err.message });
 
-      db.all(query, [targetDate], (err, rows) => {
-        db.close();
+      const daysMap = {};
+      const summaryMap = {};
+      let totalRangeSeconds = 0;
 
-        if (err) return res.status(500).json({ error: 'DB read error', details: err.message });
+      rows.forEach(row => {
+        const d = row.day;
+        if (!daysMap[d]) daysMap[d] = { date: d, apps: [], total_seconds: 0 };
+        
+        daysMap[d].apps.push({ name: row.app_name, seconds: row.seconds });
+        daysMap[d].total_seconds += row.seconds;
 
-        const daysMap = {};
-        const summaryMap = {};
-        let totalRangeSeconds = 0;
-
-        for (const row of rows) {
-          const d = row.group_date;
-          if (!d) continue;
-
-          let app = row.app_name;
-          // Normalize domains to parent if they have "::"
-          if (app.includes('::')) {
-            app = app.split('::')[0];
-          }
-          
-          const total = row.total;
-
-          if (!daysMap[d]) {
-            daysMap[d] = { date: d, apps: {}, total_seconds: 0 };
-          }
-          
-          if (!daysMap[d].apps[app]) {
-            daysMap[d].apps[app] = { name: app, seconds: 0 };
-          }
-          daysMap[d].apps[app].seconds += total;
-          daysMap[d].total_seconds += total;
-
-          if (!summaryMap[app]) {
-            summaryMap[app] = { name: app, total_seconds: 0, percentage: 0 };
-          }
-          summaryMap[app].total_seconds += total;
-          totalRangeSeconds += total;
-        }
-
-        // Convert the apps object to an array for each day
-        const days = Object.values(daysMap).map(day => {
-          day.apps = Object.values(day.apps).sort((a, b) => b.seconds - a.seconds);
-          return day;
-        }).sort((a, b) => a.date.localeCompare(b.date));
-
-        const summary = Object.values(summaryMap)
-          .sort((a, b) => b.total_seconds - a.total_seconds)
-          .map(app => {
-            app.percentage = totalRangeSeconds > 0 ? Math.round((app.total_seconds / totalRangeSeconds) * 100) : 0;
-            return app;
-          });
-
-        res.json({
-          start: targetDate,
-          days,
-          summary
-        });
+        const baseApp = row.app_name.includes('::') ? row.app_name.split('::')[0] : row.app_name;
+        if (!summaryMap[baseApp]) summaryMap[baseApp] = 0;
+        summaryMap[baseApp] += row.seconds;
+        totalRangeSeconds += row.seconds;
       });
+
+      const days = Object.values(daysMap);
+      const summary = Object.entries(summaryMap)
+        .sort((a, b) => b[1] - a[1])
+        .map(([name, total]) => ({
+          name,
+          total_seconds: total,
+          percentage: totalRangeSeconds > 0 ? Math.round((total / totalRangeSeconds) * 100) : 0
+        }));
+
+      res.json({ start: startDate, days, summary });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/screentime/reset', (req, res) => {
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    const path = require('path');
+    const dbPath = path.join(__dirname, '..', 'screen_time.db');
+    const db = new sqlite3.Database(dbPath, sqlite3.OPEN_READWRITE);
+
+    db.run("DELETE FROM screen_time_sessions", [], (err) => {
+      db.close();
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ success: true, message: 'Screen time history cleared.' });
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

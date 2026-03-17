@@ -34,13 +34,26 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "screen_time.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Check if we need to migrate
+    cursor.execute("PRAGMA table_info(screen_time_sessions)")
+    columns = [c[1] for c in cursor.fetchall()]
+    
+    # If the old schema is detected (it has 'total_seconds' but not 'timestamp')
+    if columns and "total_seconds" in columns and "timestamp" not in columns:
+        logger.info("Detected old Screen Time schema. Migrating to session-based format...")
+        try:
+            cursor.execute("DROP TABLE screen_time_sessions")
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Migration error: {e}")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS screen_time_sessions (
-            date TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
             app_name TEXT,
-            total_seconds INTEGER DEFAULT 0,
-            last_seen TEXT,
-            PRIMARY KEY (date, app_name)
+            duration_seconds INTEGER
         )
     """)
     conn.execute("""
@@ -192,26 +205,26 @@ def get_website_from_title(app_name, title):
             return site
     return None
 
-screen_time_buffer = {}
+screen_time_buffer = {}  # Key: (ts_minute, app_name), Value: seconds
+
 def flush_screen_time_buffer_sync():
+    global screen_time_buffer
     if not screen_time_buffer:
         return
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        # Create a copy to avoid mutation during threading if called from elsewhere
+        # Create a copy to avoid mutation during threading
         current_items = list(screen_time_buffer.items())
-        for (date, app_name), data in current_items:
+        for (ts, app_name), seconds in current_items:
             cursor.execute("""
-                INSERT INTO screen_time_sessions (date, app_name, total_seconds, last_seen)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(date, app_name) DO UPDATE SET 
-                    total_seconds = total_seconds + ?,
-                    last_seen = ?
-            """, (date, app_name, data["seconds"], data["last_seen"], data["seconds"], data["last_seen"]))
+                INSERT INTO screen_time_sessions (timestamp, app_name, duration_seconds)
+                VALUES (?, ?, ?)
+            """, (ts, app_name, seconds))
         conn.commit()
         conn.close()
-        # Only clear what we just wrote
+        
+        # Clear the items we just wrote
         for key, _ in current_items:
             if key in screen_time_buffer:
                 del screen_time_buffer[key]
@@ -248,15 +261,15 @@ async def screen_time_loop():
             asyncio.create_task(asyncio.to_thread(log_event, "APP", app_name, f"Focused on: {title or app_name}"))
             last_active_app = current_focus
 
-        today = datetime.now().strftime("%Y-%m-%d")
-        now_str = datetime.now().isoformat()
+        # Use a timestamp rounded to the minute for the buffer key
+        now = datetime.now()
+        ts_minute = now.strftime("%Y-%m-%d %H:%M:00")
         
-        key = (today, record_name)
+        key = (ts_minute, record_name)
         if key not in screen_time_buffer:
-            screen_time_buffer[key] = {"seconds": 0, "last_seen": now_str}
+            screen_time_buffer[key] = 0
             
-        screen_time_buffer[key]["seconds"] += 1
-        screen_time_buffer[key]["last_seen"] = now_str
+        screen_time_buffer[key] += 1
         
         # Write to database periodically
         if time.time() - last_db_write >= 15:
@@ -269,7 +282,15 @@ async def screen_time_loop():
 def get_screen_time_data_sync():
     conn = sqlite3.connect(DB_PATH)
     today = datetime.now().strftime("%Y-%m-%d")
-    rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
+    # Aggregate by app_name for the real-time daily view
+    query = """
+        SELECT app_name, SUM(duration_seconds), MAX(timestamp) 
+        FROM screen_time_sessions 
+        WHERE date(timestamp) = ? 
+        GROUP BY app_name 
+        ORDER BY SUM(duration_seconds) DESC
+    """
+    rows = conn.execute(query, (today,)).fetchall()
     data = [{"app": r[0], "time": r[1], "last_seen": r[2]} for r in rows]
     conn.close()
     return today, data

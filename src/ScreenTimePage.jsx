@@ -20,6 +20,7 @@ export default function ScreenTimePage() {
     const [chartData, setChartData] = useState([]);
     const [chartSummary, setChartSummary] = useState([]);
     const [tooltip, setTooltip] = useState(null);
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     const appColorsFixed = {
         'Google Chrome': '#4285F4',
@@ -54,10 +55,22 @@ export default function ScreenTimePage() {
     useEffect(() => {
         const fetchChartData = async () => {
             try {
-                const daysCount = viewMode === '1D' ? 1 : viewMode === '3D' ? 3 : 7;
-                const res = await fetch(`http://localhost:3005/api/screentime/history?days=${daysCount}`);
+                let url;
+                if (viewMode === '1D') {
+                    url = `http://localhost:3005/api/screentime`;
+                } else {
+                    const daysCount = viewMode === '3D' ? 3 : 7;
+                    url = `http://localhost:3005/api/screentime/history?days=${daysCount}`;
+                }
+
+                const res = await fetch(url);
                 const json = await res.json();
-                setChartData(json.days || []);
+                
+                if (viewMode === '1D') {
+                    setChartData(json.hours || []);
+                } else {
+                    setChartData(json.days || []);
+                }
                 setChartSummary(json.summary || []);
             } catch (err) {
                 console.error("Failed to load chart data", err);
@@ -65,11 +78,7 @@ export default function ScreenTimePage() {
         };
 
         fetchChartData();
-
-        const interval = setInterval(() => {
-            fetchChartData();
-        }, 60000);
-
+        const interval = setInterval(fetchChartData, 15000); // Higher resolution live updates
         return () => clearInterval(interval);
     }, [viewMode]);
 
@@ -77,25 +86,41 @@ export default function ScreenTimePage() {
     const H = 200;   
     const PADDING = 25;
 
-    const maxY = Math.max(60, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60))); 
+    const maxY = Math.max(30, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60))); 
 
-    const daysCount = viewMode === '1D' ? 1 : viewMode === '3D' ? 3 : 7;
-    const numCols = daysCount;
+    const numCols = viewMode === '1D' ? 24 : (viewMode === '3D' ? 3 : 7);
     const colWidth = (W - PADDING * 2) / numCols;
-    const gap = Math.min(colWidth * 0.2, 40); // cap gap width so 1D doesn't look ridiculous
-    const barW = colWidth - gap;
+    const gap = viewMode === '1D' ? 2 : Math.min(colWidth * 0.2, 40);
+    const barW = Math.max(1, colWidth - gap);
 
-    const todayAtMidnight = new Date();
-    const labels = Array.from({length: daysCount}, (_, i) => {
-        const diffIdx = daysCount - 1 - i;
-        const d = new Date(todayAtMidnight.getTime() - diffIdx * 24 * 60 * 60 * 1000);
-        const dateStr = localDateStr(d);
-        return {
-            index: i,
-            label: diffIdx === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }),
-            data: chartData.find(cd => cd.date === dateStr)
-        };
-    });
+    const labels = useMemo(() => {
+        if (viewMode === '1D') {
+            return Array.from({ length: 24 }, (_, i) => {
+                const hourNum = i % 12 || 12;
+                const ampm = i < 12 ? 'am' : 'pm';
+                return {
+                    index: i,
+                    label: i % 4 === 0 ? `${hourNum}${ampm}` : '',
+                    fullLabel: `${hourNum}:00 ${ampm}`,
+                    data: chartData[i]
+                };
+            });
+        }
+        
+        const daysCount = viewMode === '3D' ? 3 : 7;
+        const todayAtMidnight = new Date();
+        return Array.from({ length: daysCount }, (_, i) => {
+            const diffIdx = daysCount - 1 - i;
+            const d = new Date(todayAtMidnight.getTime() - diffIdx * 24 * 60 * 60 * 1000);
+            const dateStr = localDateStr(d);
+            return {
+                index: i,
+                label: diffIdx === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }),
+                fullLabel: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                data: chartData.find(cd => cd.date === dateStr)
+            };
+        });
+    }, [viewMode, chartData]);
 
     const renderBars = () => {
         return labels.map((col, i) => {
@@ -137,12 +162,12 @@ export default function ScreenTimePage() {
                                 onMouseEnter={(e) => setTooltip({
                                     x: e.clientX,
                                     y: e.clientY - 20,
-                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.label})`
+                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.fullLabel})`
                                 })}
                                 onMouseMove={(e) => setTooltip({
                                     x: e.clientX,
                                     y: e.clientY - 20,
-                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.label})`
+                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.fullLabel})`
                                 })}
                                 onMouseLeave={() => setTooltip(null)}
                             />
@@ -319,7 +344,47 @@ export default function ScreenTimePage() {
                                 ) : (
                                     <span className="st-reconnecting-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}>⚠ Reconnecting...</span>
                                 )}
-                                <button onClick={exportToCSV} style={{ padding: '4px 10px', fontSize: '12px' }}>Export to CSV</button>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                    <button 
+                                        onClick={exportToCSV} 
+                                        style={{ background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                                    >
+                                        Export to CSV
+                                    </button>
+                                    
+                                    {!showResetConfirm ? (
+                                        <button 
+                                            onClick={() => setShowResetConfirm(true)}
+                                            style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#fee2e2', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                                        >
+                                            Reset History
+                                        </button>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.1)', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                            <span style={{ fontSize: '10px', color: '#fca5a5', fontWeight: 'bold' }}>Sure?</span>
+                                            <button 
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetch('http://localhost:3005/api/screentime/reset', { method: 'POST' });
+                                                        setChartData([]);
+                                                        setChartSummary([]);
+                                                        setScreenTimeData([]);
+                                                        setShowResetConfirm(false);
+                                                    } catch(e) { console.error(e); }
+                                                }}
+                                                style={{ background: '#ef4444', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+                                            >
+                                                YES
+                                            </button>
+                                            <button 
+                                                onClick={() => setShowResetConfirm(false)}
+                                                style={{ background: '#475569', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+                                            >
+                                                NO
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                             <h1>Screen Activity</h1>
 
@@ -391,6 +456,9 @@ export default function ScreenTimePage() {
                 <div className="st-card st-chart-card">
                     <div className="st-card-header">
                         <h3><span>📊</span> Activity Timeline</h3>
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
+                            {viewMode === '1D' ? 'Hourly breakdown of application usage today' : `Daily usage over the last ${viewMode === '3D' ? '3' : '7'} days`}
+                        </p>
                     </div>
                     <div className="st-chart-wrapper" style={{ padding: '1rem', position: 'relative' }}>
                         <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
