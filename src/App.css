@@ -2275,8 +2275,8 @@
 .st-card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
 }
 
 .st-card-header h3 {
@@ -2447,8 +2447,9 @@
 .st-chart-wrapper {
   flex: 1;
   display: flex;
-  align-items: flex-end;
-  padding-bottom: 2rem;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
   min-height: 200px;
 }
 

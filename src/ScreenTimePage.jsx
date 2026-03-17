@@ -20,6 +20,7 @@ export default function ScreenTimePage() {
     const [chartData, setChartData] = useState([]);
     const [chartSummary, setChartSummary] = useState([]);
     const [tooltip, setTooltip] = useState(null);
+    const [activeCol, setActiveCol] = useState(null); // For fixed detail box
     const [showResetConfirm, setShowResetConfirm] = useState(false);
 
     const appColorsFixed = {
@@ -65,7 +66,7 @@ export default function ScreenTimePage() {
 
                 const res = await fetch(url);
                 const json = await res.json();
-                
+
                 if (viewMode === '1D') {
                     setChartData(json.hours || []);
                 } else {
@@ -82,14 +83,17 @@ export default function ScreenTimePage() {
         return () => clearInterval(interval);
     }, [viewMode]);
 
-    const W = 800;   
-    const H = 200;   
-    const PADDING = 25;
+    const W = 800;
+    const H = 200;
+    const PADDING_L = 40; // More space for Y labels
+    const PADDING_B = 25;
+    const PADDING_R = 15;
 
-    const maxY = Math.max(30, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60))); 
+    const maxDataVal = Math.max(1, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60)));
+    const maxY = Math.ceil(maxDataVal / 5) * 5 + 5; // Snap to nearest 5m with buffer
 
     const numCols = viewMode === '1D' ? 24 : (viewMode === '3D' ? 3 : 7);
-    const colWidth = (W - PADDING * 2) / numCols;
+    const colWidth = (W - PADDING_L - PADDING_R) / numCols;
     const gap = viewMode === '1D' ? 2 : Math.min(colWidth * 0.2, 40);
     const barW = Math.max(1, colWidth - gap);
 
@@ -106,7 +110,7 @@ export default function ScreenTimePage() {
                 };
             });
         }
-        
+
         const daysCount = viewMode === '3D' ? 3 : 7;
         const todayAtMidnight = new Date();
         return Array.from({ length: daysCount }, (_, i) => {
@@ -124,10 +128,26 @@ export default function ScreenTimePage() {
 
     const renderBars = () => {
         return labels.map((col, i) => {
-            const x = PADDING + i * colWidth + gap / 2;
+            const x = PADDING_L + i * colWidth + gap / 2;
+            const isActive = activeCol?.index === i;
+
+            const colClickArea = (
+                <rect
+                    key={`hit-${i}`}
+                    x={x - gap / 2} y={0} width={colWidth} height={H - PADDING_B}
+                    fill="transparent"
+                    onMouseEnter={() => setActiveCol(col)}
+                    onMouseLeave={() => setActiveCol(null)}
+                    style={{ cursor: 'pointer' }}
+                />
+            );
+
             if (!col.data || !col.data.apps || col.data.apps.length === 0) {
                 return (
-                    <rect key={`empty-${i}`} x={x} y={H - PADDING - 2} width={barW} height={2} fill="#334155" />
+                    <g key={`col-empty-${i}`}>
+                        <rect x={x} y={H - PADDING_B - 2} width={barW} height={2} fill="#334155" opacity={activeCol ? 0.1 : 0.3} />
+                        {colClickArea}
+                    </g>
                 );
             }
 
@@ -148,31 +168,23 @@ export default function ScreenTimePage() {
             }
 
             return (
-                <g key={`col-${i}`}>
+                <g key={`col-${i}`} style={{ opacity: activeCol && !isActive ? 0.3 : 1, transition: 'opacity 0.3s' }}>
                     {grouped.map((app, j) => {
                         const mins = app.seconds / 60;
-                        const hBar = Math.max(2, (mins / Math.max(maxY, 1)) * (H - PADDING * 2));
-                        const yBar = H - PADDING - yOffset - hBar;
+                        const hBar = Math.max(2, (mins / Math.max(maxY, 1)) * (H - PADDING_B - 20));
+                        const yBar = H - PADDING_B - yOffset - hBar;
                         yOffset += hBar;
                         return (
-                            <rect 
-                                key={`part-${i}-${j}`} 
-                                x={x} y={yBar} width={barW} height={hBar} 
-                                fill={getChartAppColor(app.name)} 
-                                onMouseEnter={(e) => setTooltip({
-                                    x: e.clientX,
-                                    y: e.clientY - 20,
-                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.fullLabel})`
-                                })}
-                                onMouseMove={(e) => setTooltip({
-                                    x: e.clientX,
-                                    y: e.clientY - 20,
-                                    content: `${app.name} — ${Math.floor(app.seconds / 60)}m ${app.seconds % 60}s (${col.fullLabel})`
-                                })}
-                                onMouseLeave={() => setTooltip(null)}
+                            <rect
+                                key={`part-${i}-${j}`}
+                                x={x} y={yBar} width={barW} height={hBar}
+                                fill={getChartAppColor(app.name)}
+                                rx={j === grouped.length - 1 ? 2 : 0}
+                                style={{ transition: 'opacity 0.2s ease', pointerEvents: 'none' }}
                             />
                         );
                     })}
+                    {colClickArea}
                 </g>
             );
         });
@@ -345,15 +357,15 @@ export default function ScreenTimePage() {
                                     <span className="st-reconnecting-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}>⚠ Reconnecting...</span>
                                 )}
                                 <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                                    <button 
-                                        onClick={exportToCSV} 
+                                    <button
+                                        onClick={exportToCSV}
                                         style={{ background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
                                     >
                                         Export to CSV
                                     </button>
-                                    
+
                                     {!showResetConfirm ? (
-                                        <button 
+                                        <button
                                             onClick={() => setShowResetConfirm(true)}
                                             style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#fee2e2', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
                                         >
@@ -362,7 +374,7 @@ export default function ScreenTimePage() {
                                     ) : (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.1)', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
                                             <span style={{ fontSize: '10px', color: '#fca5a5', fontWeight: 'bold' }}>Sure?</span>
-                                            <button 
+                                            <button
                                                 onClick={async () => {
                                                     try {
                                                         await fetch('http://localhost:3005/api/screentime/reset', { method: 'POST' });
@@ -370,13 +382,13 @@ export default function ScreenTimePage() {
                                                         setChartSummary([]);
                                                         setScreenTimeData([]);
                                                         setShowResetConfirm(false);
-                                                    } catch(e) { console.error(e); }
+                                                    } catch (e) { console.error(e); }
                                                 }}
                                                 style={{ background: '#ef4444', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
                                             >
                                                 YES
                                             </button>
-                                            <button 
+                                            <button
                                                 onClick={() => setShowResetConfirm(false)}
                                                 style={{ background: '#475569', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
                                             >
@@ -432,17 +444,17 @@ export default function ScreenTimePage() {
 
                     <div className="st-date-nav">
                         <div className="st-view-toggle" style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '4px', borderRadius: '6px' }}>
-                            <button 
+                            <button
                                 onClick={() => setViewMode('1D')}
                                 style={{ padding: '6px 16px', background: viewMode === '1D' ? '#475569' : 'transparent', color: viewMode === '1D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
                                 1D
                             </button>
-                            <button 
+                            <button
                                 onClick={() => setViewMode('3D')}
                                 style={{ padding: '6px 16px', background: viewMode === '3D' ? '#475569' : 'transparent', color: viewMode === '3D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
                                 3D
                             </button>
-                            <button 
+                            <button
                                 onClick={() => setViewMode('7D')}
                                 style={{ padding: '6px 16px', background: viewMode === '7D' ? '#475569' : 'transparent', color: viewMode === '7D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
                                 7D
@@ -455,40 +467,137 @@ export default function ScreenTimePage() {
             <div className="st-content-grid">
                 <div className="st-card st-chart-card">
                     <div className="st-card-header">
-                        <h3><span>📊</span> Activity Timeline</h3>
-                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '4px' }}>
-                            {viewMode === '1D' ? 'Hourly breakdown of application usage today' : `Daily usage over the last ${viewMode === '3D' ? '3' : '7'} days`}
-                        </p>
+                        <div>
+                            <h3><span>📊</span> Activity Timeline</h3>
+                            <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+                                {viewMode === '1D' ? 'Hourly breakdown of application usage today' : `Daily usage over the last ${viewMode === '3D' ? '3' : '7'} days`}
+                            </p>
+                        </div>
                     </div>
-                    <div className="st-chart-wrapper" style={{ padding: '1rem', position: 'relative' }}>
+
+                    <div className="st-chart-wrapper" style={{ padding: '1.5rem 1rem 1rem 0.5rem', position: 'relative' }}>
                         <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
+                            {/* Grid Gradient BG */}
+                            <defs>
+                                <linearGradient id="gridGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="rgba(59, 130, 246, 0.05)" />
+                                    <stop offset="100%" stopColor="transparent" />
+                                </linearGradient>
+                            </defs>
+                            <rect x={PADDING_L} y={20} width={W - PADDING_L - PADDING_R} height={H - PADDING_B - 20} fill="url(#gridGrad)" rx="8" style={{ pointerEvents: 'none' }} />
+
                             {/* Y axis steps */}
                             {[0, 0.5, 1].map(pct => {
-                                const yLine = H - PADDING - pct * (H - PADDING * 2);
+                                const val = Math.round(pct * maxY);
+                                const yLine = H - PADDING_B - pct * (H - PADDING_B - 20);
                                 return (
                                     <g key={`y-${pct}`}>
-                                        <line x1={PADDING} y1={yLine} x2={W - PADDING} y2={yLine} stroke="#334155" strokeDasharray="4 4" />
-                                        <text x={PADDING - 5} y={yLine + 4} fill="#64748b" fontSize="10" textAnchor="end">{Math.round(pct * maxY)}m</text>
+                                        <line x1={PADDING_L} y1={yLine} x2={W - PADDING_R} y2={yLine} stroke="#1e293b" opacity="0.6" strokeDasharray="4 4" />
+                                        <text x={PADDING_L - 8} y={yLine + 4} fill="#64748b" fontSize="10" fontWeight="600" textAnchor="end">{val}m</text>
                                     </g>
                                 );
                             })}
-                            
+
                             {/* Bars */}
                             {renderBars()}
 
+                            {/* Active Indicator Line (Crosshair) */}
+                            {activeCol && (
+                                <line
+                                    x1={PADDING_L + activeCol.index * colWidth + colWidth / 2}
+                                    y1={20}
+                                    x2={PADDING_L + activeCol.index * colWidth + colWidth / 2}
+                                    y2={H - PADDING_B}
+                                    stroke="rgba(255,255,255,0.3)"
+                                    strokeWidth="1.5"
+                                    strokeDasharray="4 2"
+                                    style={{ pointerEvents: 'none' }}
+                                />
+                            )}
+
                             {/* X axis labels */}
                             {labels.map((col, i) => col.label ? (
-                                <text key={`x-${i}`} x={PADDING + i * colWidth + gap / 2 + barW / 2} y={H - 2} fill="#64748b" fontSize="10" textAnchor="middle">
+                                <text key={`x-${i}`} x={PADDING_L + i * colWidth + gap / 2 + barW / 2} y={H - 2} fill={activeCol?.index === i ? '#e2e8f0' : '#475569'} fontSize="10" fontWeight="700" textAnchor="middle" style={{ transition: 'fill 0.2s' }}>
                                     {col.label}
                                 </text>
                             ) : null)}
                         </svg>
 
-                        {tooltip && (
-                            <div style={{ position: 'fixed', left: tooltip.x, top: tooltip.y, transform: 'translate(-50%, -100%)', background: '#1e293b', padding: '6px 10px', borderRadius: '4px', fontSize: '12px', color: 'white', pointerEvents: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', zIndex: 9999 }}>
-                                {tooltip.content}
-                            </div>
-                        )}
+                        {/* Fixed Detail Box */}
+                        <div className="st-fixed-detail-box" style={{
+                            height: '190px',
+                            marginTop: '1.5rem',
+                            background: 'rgba(10, 15, 28, 0.95)',
+                            backdropFilter: 'blur(20px)',
+                            borderRadius: '24px',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            padding: '1.5rem 2.25rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'center',
+                            transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                            boxShadow: activeCol ? '0 15px 45px -10px rgba(59, 130, 246, 0.4)' : 'none',
+                            position: 'relative',
+                            overflow: 'hidden'
+                        }}>
+                            {!activeCol ? (
+                                <div style={{ color: '#64748b', fontSize: '0.95rem', fontStyle: 'italic', textAlign: 'center', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <span style={{ fontSize: '1.2rem' }}>📊</span>
+                                    </div>
+                                    Hover over the timeline to view session details
+                                </div>
+                            ) : (
+                                <>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '0.75rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 12px rgba(59, 130, 246, 0.6)', animation: 'pulse 2s infinite' }} />
+                                            <span style={{ color: '#ffffff', fontWeight: '800', fontSize: '1.25rem', letterSpacing: '-0.02em', lineHeight: 1 }}>{activeCol.fullLabel}</span>
+                                        </div>
+                                        <div style={{ textAlign: 'right' }}>
+                                            <span style={{ color: '#475569', fontSize: '0.65rem', fontWeight: '800', textTransform: 'uppercase', display: 'block', marginBottom: '2px', letterSpacing: '0.08em' }}>Session Duration</span>
+                                            <span style={{ color: '#3b82f6', fontWeight: '900', fontSize: '1.15rem', display: 'block', lineHeight: 1 }}>{formatTime(activeCol.data?.total_seconds || 0)}</span>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem 3rem' }}>
+                                        {(() => {
+                                            const apps = [...(activeCol.data?.apps || [])].sort((a, b) => b.seconds - a.seconds);
+                                            const displayList = apps.slice(0, 4);
+                                            const total = activeCol.data?.total_seconds || 1;
+
+                                            return displayList.map((app, idx) => (
+                                                <div key={idx} className="st-detail-app-card" style={{
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '6px',
+                                                    minWidth: 0
+                                                }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: '700' }}>
+                                                        <span style={{ color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '75%' }}>{app.name.split('.')[0]}</span>
+                                                        <span style={{ color: '#94a3b8' }}>{formatTime(app.seconds)}</span>
+                                                    </div>
+                                                    <div style={{ height: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '100px', overflow: 'hidden', position: 'relative' }}>
+                                                        <div style={{
+                                                            height: '100%',
+                                                            width: `${(app.seconds / total) * 100}%`,
+                                                            background: getChartAppColor(app.name),
+                                                            boxShadow: `0 0 10px ${getChartAppColor(app.name)}44`,
+                                                            borderRadius: '100px',
+                                                            transition: 'width 1s cubic-bezier(0.16, 1, 0.3, 1)'
+                                                        }} />
+                                                    </div>
+                                                </div>
+                                            ));
+                                        })()}
+                                        {(!activeCol.data?.apps || activeCol.data.apps.length === 0) && (
+                                            <div style={{ gridColumn: '1 / -1', color: '#475569', fontSize: '0.85rem', textAlign: 'center', padding: '1rem', fontStyle: 'italic' }}>
+                                                No tracked activity for this interval
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
 
                         {/* Chart Legend */}
                         <div className="st-chart-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
@@ -505,7 +614,7 @@ export default function ScreenTimePage() {
                                     </div>
                                 );
                             })}
-                            
+
                             {chartSummary.filter(s => !top5Names.includes(s.name)).length > 0 && (() => {
                                 const otherSum = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.total_seconds, 0);
                                 const otherPct = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.percentage, 0);
