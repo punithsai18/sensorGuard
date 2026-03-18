@@ -301,7 +301,7 @@ export default function ScreenTimePage() {
     }
 
     // Aggregate Top Apps vs Top Websites
-    const topAppsMap = {};
+    const topAppsData = {}; // name -> { time, icon }
     const webActivityMap = {};
 
     for (const row of screenTimeData) {
@@ -310,15 +310,24 @@ export default function ScreenTimePage() {
             const parentApp = parts[0];
             const website = parts[1];
 
-            topAppsMap[parentApp] = (topAppsMap[parentApp] || 0) + row.time;
+            if (!topAppsData[parentApp]) {
+                topAppsData[parentApp] = { time: 0, icon: row.icon };
+            }
+            topAppsData[parentApp].time += row.time;
+            
             if (!webActivityMap[parentApp]) webActivityMap[parentApp] = [];
             webActivityMap[parentApp].push({ site: website, time: row.time });
         } else {
-            topAppsMap[row.app] = (topAppsMap[row.app] || 0) + row.time;
+            if (!topAppsData[row.app]) {
+                topAppsData[row.app] = { time: 0, icon: row.icon };
+            }
+            topAppsData[row.app].time += row.time;
         }
     }
 
-    const sortedApps = Object.entries(topAppsMap).sort((a, b) => b[1] - a[1]);
+    const sortedApps = Object.entries(topAppsData)
+        .sort((a, b) => b[1].time - a[1].time)
+        .map(([name, data]) => ({ name, time: data.time, icon: data.icon }));
 
     const displayedApps = showAllProcesses ? sortedApps : sortedApps.slice(0, 5);
 
@@ -652,15 +661,8 @@ export default function ScreenTimePage() {
                                 <p>No activity detected yet. Start using apps to see magic!</p>
                             </div>
                         )}
-                        {displayedApps.map(([appName, time]) => {
-                            let icon = '📱';
-                            if (appName.includes('Chrome')) icon = '🟡';
-                            else if (appName.includes('Edge')) icon = '🔵';
-                            else if (appName.includes('Brave')) icon = '🦁';
-                            else if (appName.includes('Firefox')) icon = '🦊';
-                            else if (appName.includes('Code') || appName.includes('Vite')) icon = '⌨️';
-                            else if (appName.includes('Terminal') || appName.includes('cmd') || appName.includes('PowerShell')) icon = '🐚';
-
+                        {displayedApps.map((app) => {
+                            const { name: appName, time, icon } = app;
                             const percent = Math.min(((time / totalSeconds) * 100).toFixed(1), 100);
                             const domains = webActivityMap[appName]?.sort((a, b) => b.time - a.time) || [];
                             const isExpanded = showAllDomainsFor[appName];
@@ -669,7 +671,30 @@ export default function ScreenTimePage() {
                                 <div key={appName} className="st-app-item">
                                     <div className="st-app-header">
                                         <div className="st-app-meta">
-                                            <span className="st-app-icon-bg">{icon}</span>
+                                            {icon ? (
+                                                <img
+                                                    src={icon}
+                                                    width={36}
+                                                    height={36}
+                                                    style={{ borderRadius: 8, flexShrink: 0, objectFit: 'contain', background: 'rgba(255,255,255,0.03)', padding: '4px' }}
+                                                    alt={appName}
+                                                />
+                                            ) : (
+                                                <div style={{
+                                                    width: 36, height: 36,
+                                                    borderRadius: 8,
+                                                    background: 'rgba(255,255,255,0.08)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    fontSize: 18,
+                                                    flexShrink: 0,
+                                                    color: '#94a3b8',
+                                                    fontWeight: 'bold'
+                                                }}>
+                                                    {appName.charAt(0).toUpperCase()}
+                                                </div>
+                                            )}
                                             <div>
                                                 <div className="st-app-name-row">
                                                     <span className="st-app-title">{appName}</span>
@@ -746,7 +771,11 @@ export default function ScreenTimePage() {
 
                             return (
                                 <div key={idx} className="st-bg-app-card">
-                                    <div className="st-bg-app-icon">{icon}</div>
+                                    <div className="st-bg-app-icon">
+                                        {app.icon ? (
+                                            <img src={app.icon} width={24} height={24} style={{ borderRadius: 4, objectFit: 'contain' }} alt="" />
+                                        ) : icon}
+                                    </div>
                                     <div className="st-bg-app-info">
                                         <div className="st-bg-app-name">{app.app}</div>
                                         <div className="st-bg-app-title" title={app.title}>{app.title}</div>

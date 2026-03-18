@@ -17,15 +17,26 @@ from port_utils import kill_port_holder
 try:
     from timeline_logger import log_event
 except ImportError:
-    def log_event(*args): pass
+    def log_event(*args, **kwargs): pass
 
 try:
     import ctypes
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     IS_WINDOWS = True
 except Exception:
     IS_WINDOWS = False
+
+# Ensure websockets and its exceptions are available
+try:
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+except ImportError:
+    try:
+        from websockets import ConnectionClosed
+    except ImportError:
+        ConnectionClosed = Exception
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ScreenTimeTracker")
@@ -53,9 +64,21 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             timestamp TEXT,
             app_name TEXT,
-            duration_seconds INTEGER
+            duration_seconds INTEGER,
+            exe_path TEXT
         )
     """)
+    # Migration: Add exe_path if it doesn't exist
+    try:
+        cursor.execute("PRAGMA table_info(screen_time_sessions)")
+        cols = [c[1] for c in cursor.fetchall()]
+        if "exe_path" not in cols:
+            cursor.execute("ALTER TABLE screen_time_sessions ADD COLUMN exe_path TEXT")
+            conn.commit()
+            logger.info("Migrated screen_time_sessions to include exe_path column.")
+    except Exception as e:
+        logger.error(f"Migration error (exe_path): {e}")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS timeline_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +176,7 @@ def get_idle_time_windows():
 def get_active_window_info():
     if not IS_WINDOWS:
         # Dummy fallback for non-windows
-        return "Unknown OS", "Unknown Window", 0
+        return "Unknown OS", "Unknown Window", 0, None
     
     try:
         hwnd = user32.GetForegroundWindow()
@@ -170,11 +193,13 @@ def get_active_window_info():
         try:
             p = psutil.Process(pid.value)
             name = p.name()
+            exe_path = p.exe()
         except:
             name = "Unknown"
-        return name, title, pid.value
+            exe_path = None
+        return name, title, pid.value, exe_path
     except:
-        return None, None, 0
+        return None, None, 0, None
 
 def clean_app_name(name, title):
     if not name: return "Unknown"
@@ -205,7 +230,7 @@ def get_website_from_title(app_name, title):
             return site
     return None
 
-screen_time_buffer = {}  # Key: (ts_minute, app_name), Value: seconds
+screen_time_buffer = {}  # Key: (ts_minute, record_name, exe_path), Value: seconds
 
 def flush_screen_time_buffer_sync():
     global screen_time_buffer
@@ -216,11 +241,11 @@ def flush_screen_time_buffer_sync():
         cursor = conn.cursor()
         # Create a copy to avoid mutation during threading
         current_items = list(screen_time_buffer.items())
-        for (ts, app_name), seconds in current_items:
+        for (ts, record_name, exe_path), seconds in current_items:
             cursor.execute("""
-                INSERT INTO screen_time_sessions (timestamp, app_name, duration_seconds)
-                VALUES (?, ?, ?)
-            """, (ts, app_name, seconds))
+                INSERT INTO screen_time_sessions (timestamp, app_name, duration_seconds, exe_path)
+                VALUES (?, ?, ?, ?)
+            """, (ts, record_name, seconds, exe_path))
         conn.commit()
         conn.close()
         
@@ -246,7 +271,7 @@ async def screen_time_loop():
             
         res = await asyncio.to_thread(get_active_window_info)
         if not res or not res[0]: continue
-        app_exe, title, pid = res
+        app_exe, title, pid, exe_path = res
         
         app_name = clean_app_name(app_exe, title)
         website = get_website_from_title(app_name, title)
@@ -265,11 +290,8 @@ async def screen_time_loop():
         now = datetime.now()
         ts_minute = now.strftime("%Y-%m-%d %H:%M:00")
         
-        key = (ts_minute, record_name)
-        if key not in screen_time_buffer:
-            screen_time_buffer[key] = 0
-            
-        screen_time_buffer[key] += 1
+        key = (ts_minute, record_name, exe_path)
+        screen_time_buffer[key] = screen_time_buffer.get(key, 0) + 1
         
         # Write to database periodically
         if time.time() - last_db_write >= 15:
@@ -284,14 +306,24 @@ def get_screen_time_data_sync():
     today = datetime.now().strftime("%Y-%m-%d")
     # Aggregate by app_name for the real-time daily view
     query = """
-        SELECT app_name, SUM(duration_seconds), MAX(timestamp) 
+        SELECT app_name, SUM(duration_seconds), MAX(timestamp), exe_path
         FROM screen_time_sessions 
         WHERE date(timestamp) = ? 
         GROUP BY app_name 
         ORDER BY SUM(duration_seconds) DESC
     """
     rows = conn.execute(query, (today,)).fetchall()
-    data = [{"app": r[0], "time": r[1], "last_seen": r[2]} for r in rows]
+    data = [{"app": r[0], "time": r[1], "last_seen": r[2], "exe_path": r[3]} for r in rows]
+    
+    # PART 3: ADD ICONS TO RESPONSE
+    # (Since this is Python, we can call it directly)
+    try:
+        from backend.icon_extractor import get_app_icon
+        for entry in data:
+            entry["icon"] = get_app_icon(entry["app"], entry["exe_path"])
+    except ImportError:
+        pass
+        
     conn.close()
     return today, data
 
@@ -315,10 +347,11 @@ async def push_screen_time():
 async def register(websocket):
     clients.add(websocket)
     try:
-        # Push cached data instantly
         await websocket.send(json.dumps(LATEST_DATA))
         await websocket.wait_closed()
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
+        pass
+    except Exception:
         pass
     finally:
         if websocket in clients:

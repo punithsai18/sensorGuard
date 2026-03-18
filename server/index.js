@@ -128,7 +128,8 @@ app.get('/api/screentime', (req, res) => {
       SELECT 
         CAST(strftime('%H', timestamp) AS INTEGER) as hour,
         app_name,
-        SUM(duration_seconds) as seconds
+        SUM(duration_seconds) as seconds,
+        MAX(exe_path) as exe_path
       FROM screen_time_sessions
       WHERE date(timestamp) = ?
       GROUP BY hour, app_name
@@ -152,24 +153,49 @@ app.get('/api/screentime', (req, res) => {
       rows.forEach(row => {
         const h = row.hour;
         if (h >= 0 && h < 24) {
-          hours[h].apps.push({ name: row.app_name, seconds: row.seconds });
+          hours[h].apps.push({ name: row.app_name, seconds: row.seconds, exe_path: row.exe_path });
           hours[h].total_seconds += row.seconds;
         }
         
-        // Use full app_name (including domain if present) for granular reporting
         const baseApp = row.app_name.includes('::') ? row.app_name.split('::')[0] : row.app_name;
-        if (!summaryMap[baseApp]) summaryMap[baseApp] = 0;
-        summaryMap[baseApp] += row.seconds;
+        if (!summaryMap[baseApp]) summaryMap[baseApp] = { seconds: 0, exe_path: row.exe_path };
+        summaryMap[baseApp].seconds += row.seconds;
+        if (row.exe_path) summaryMap[baseApp].exe_path = row.exe_path;
         totalDaySeconds += row.seconds;
       });
 
       const summary = Object.entries(summaryMap)
-        .sort((a, b) => b[1] - a[1])
-        .map(([name, total]) => ({
+        .sort((a, b) => b[1].seconds - a[1].seconds)
+        .map(([name, data]) => ({
           name,
-          total_seconds: total,
-          percentage: totalDaySeconds > 0 ? Math.round((total / totalDaySeconds) * 100) : 0
+          total_seconds: data.seconds,
+          exe_path: data.exe_path,
+          percentage: totalDaySeconds > 0 ? Math.round((data.seconds / totalDaySeconds) * 100) : 0
         }));
+
+      // PART 3: ADD ICONS
+      // We'll call the Python extractor for each app in the summary
+      // To avoid massive overhead, we'll do it in one batch if possible, 
+      // but for now, we'll implement a simple Python bridge.
+      try {
+        const { execSync } = require('child_process');
+        const pythonPath = process.platform === 'win32' ? 'python' : 'python3';
+        
+        summary.forEach(app => {
+          try {
+            // This is a bit slow for a REST API, but it follows the requirement to use the Python extractor.
+            // Caching in icon_extractor.py only works per-session, so here it will be cold-start.
+            // In a real prod app, we'd have a long-running icon service.
+            const cmd = `${pythonPath} -c "import sys; sys.path.append('.'); from backend.icon_extractor import get_app_icon; print(get_app_icon('${app.name}', r'${app.exe_path || ''}'))"`;
+            const icon = execSync(cmd, { cwd: path.join(__dirname, '..') }).toString().trim();
+            app.icon = icon !== 'None' ? icon : null;
+          } catch (e) {
+            app.icon = null;
+          }
+        });
+      } catch (e) {
+        console.error("Icon extraction failed", e);
+      }
 
       res.json({ date: dateStr, hours, summary });
     });

@@ -9,11 +9,23 @@ from port_utils import kill_port_holder
 
 try:
     import ctypes
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     IS_WINDOWS = True
 except Exception:
     IS_WINDOWS = False
+
+# Ensure websockets and its exceptions are available
+try:
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+except ImportError:
+    # If using an older version or if ConnectionClosed is moved
+    try:
+        from websockets import ConnectionClosed
+    except ImportError:
+        ConnectionClosed = Exception # Fallback
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BackgroundAppsMonitor")
@@ -47,19 +59,32 @@ def get_running_apps():
                 
                 # Format application name
                 app_name = clean_app_name(name, title)
+                exe_path = p.exe()
+                
+                # Extract icon
+                icon = None
+                try:
+                    from backend.icon_extractor import get_app_icon
+                    icon = get_app_icon(app_name, exe_path)
+                except:
+                    pass
+
                 apps.append({
                     "app": app_name,
                     "title": title,
-                    "pid": pid.value
+                    "pid": pid.value,
+                    "icon": icon
                 })
             except Exception:
                 pass
                 
         return True
 
-    # Call the Windows API
-    EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
-    user32.EnumWindows(EnumWindowsProc(enum_windows_proc), 0)
+    # Callback for EnumWindows
+    # BOOL CALLBACK EnumWindowsProc(HWND hwnd, LPARAM lParam);
+    # In ctypes terms: c_bool(HWND, LPARAM)
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    user32.EnumWindows(WNDENUMPROC(enum_windows_proc), 0)
     
     # Deduplicate by title to avoid multiple handles showing up from the same instance
     unique_apps = []
@@ -111,7 +136,9 @@ async def broadcast_apps_loop():
         for ws in list(clients):
             try:
                 await ws.send(msg)
-            except websockets.exceptions.ConnectionClosed:
+            except ConnectionClosed:
+                pass
+            except Exception:
                 pass
 
 async def register(websocket):
@@ -121,7 +148,9 @@ async def register(websocket):
         apps = await asyncio.to_thread(get_running_apps)
         await websocket.send(json.dumps({"event": "background_apps", "apps": apps}))
         await websocket.wait_closed()
-    except websockets.exceptions.ConnectionClosed:
+    except ConnectionClosed:
+        pass
+    except Exception:
         pass
     finally:
         if websocket in clients:
