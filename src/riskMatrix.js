@@ -11,9 +11,10 @@
 //   LOW      1-7  (green)
 
 export const RISK_THRESHOLDS = {
-  HIGH:   { min: 15, label: 'HIGH',   color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)',  icon: '🔴' },
-  MEDIUM: { min:  8, label: 'MEDIUM', color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)', icon: '🟡' },
-  LOW:    { min:  1, label: 'LOW',    color: '#22c55e', bg: 'rgba(34, 197, 94, 0.08)',  icon: '🟢' },
+  CRITICAL: { min: 20, label: 'CRITICAL', color: '#dc2626', bg: 'rgba(220, 38, 38, 0.20)', icon: '🔴' },
+  HIGH:     { min: 15, label: 'HIGH',     color: '#ef4444', bg: 'rgba(239, 68, 68, 0.15)', icon: '🟠' },
+  MEDIUM:   { min:  8, label: 'MEDIUM',   color: '#f59e0b', bg: 'rgba(245, 158, 11, 0.12)', icon: '🟡' },
+  LOW:      { min:  1, label: 'LOW',      color: '#22c55e', bg: 'rgba(34, 197, 94, 0.08)',  icon: '🟢' },
 }
 
 // Per-sensor weights [likelihood, impact] when the sensor is active/triggered.
@@ -33,8 +34,9 @@ export const SENSOR_RISK_WEIGHTS = {
  * Return the risk rating string ('HIGH' | 'MEDIUM' | 'LOW') for a numeric score.
  */
 export function getRiskRating(score) {
-  if (score >= RISK_THRESHOLDS.HIGH.min)   return 'HIGH'
-  if (score >= RISK_THRESHOLDS.MEDIUM.min) return 'MEDIUM'
+  if (score >= RISK_THRESHOLDS.CRITICAL.min) return 'CRITICAL'
+  if (score >= RISK_THRESHOLDS.HIGH.min)     return 'HIGH'
+  if (score >= RISK_THRESHOLDS.MEDIUM.min)   return 'MEDIUM'
   return 'LOW'
 }
 

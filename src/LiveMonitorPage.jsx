@@ -47,6 +47,7 @@ async function fetchScan() {
 
 function useAdvancedSensors() {
   const [sensors, setSensors] = useState(null);
+  const [riskAssessments, setRiskAssessments] = useState({});
   useEffect(() => {
     let ws;
     let reconnectTimeout;
@@ -55,7 +56,32 @@ function useAdvancedSensors() {
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.event === 'sensors_update') setSensors(data.sensors);
+          if (data.event === 'sensors_update') {
+            setSensors(data.sensors);
+            if (data.risk_assessments) {
+              setRiskAssessments(prev => ({ ...prev, ...data.risk_assessments }));
+            }
+          }
+          // Handle standalone risk_assessment events
+          if (data.event === 'risk_assessment') {
+            setRiskAssessments(prev => ({
+              ...prev,
+              [data.sensor]: {
+                risk_level: data.risk_level,
+                risk_score: data.risk_score,
+                likelihood: data.likelihood,
+                impact: data.impact,
+                confidence: data.confidence,
+                reasoning: data.reasoning,
+                mitre_technique: data.mitre_technique,
+                recommended_action: data.recommended_action,
+                is_false_positive: data.is_false_positive,
+                is_fallback: data.is_fallback,
+                process: data.process,
+                timestamp: data.timestamp,
+              }
+            }));
+          }
         } catch (e) { }
       };
       ws.onclose = () => { reconnectTimeout = setTimeout(connect, 2000); };
@@ -63,7 +89,7 @@ function useAdvancedSensors() {
     connect();
     return () => { clearTimeout(reconnectTimeout); if (ws) { ws.onclose = null; ws.close(); } };
   }, []);
-  return sensors;
+  return { sensors, riskAssessments };
 }
 
 function useBackgroundWindowTitles() {
@@ -197,7 +223,7 @@ function MultiSensorAttackAlert({ cameraActive, micActive, sensors }) {
   );
 }
 
-function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors, risk }) {
+function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSensors, risk, aiRisk }) {
   const [killingProc, setKillingProc] = useState(null);
 
   const camActive = camera?.active ?? false
@@ -290,9 +316,28 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <div>{camActive ? camDet.process : '—'}</div>
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{camActive ? camDet.info : ''}</div>
               </td>
-              <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: camActive ? '#4ade80' : '#64748b' }}>{camActive ? 'NORMAL' : '—'}</span>
-                {camActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.camera})</span>}
+            <td style={{ padding: '0.75rem' }}>
+                {(() => {
+                  const ai = aiRisk?.camera;
+                  if (camActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
+                        {ai.mitre_technique && <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.15rem' }}>{ai.mitre_technique}</div>}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: camActive ? '#4ade80' : '#64748b' }}>{camActive ? 'NORMAL' : '—'}</span>
+                      {camActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.camera})</span>}
+                    </>
+                  );
+                })()}
                 {camActive && camDet.pid && (
                   <button
                     disabled={killingProc === camDet.pid}
@@ -317,8 +362,27 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                 <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{micActive ? micDet.info : ''}</div>
               </td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: micActive ? '#4ade80' : '#64748b' }}>{micActive ? 'NORMAL' : '—'}</span>
-                {micActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.microphone})</span>}
+                {(() => {
+                  const ai = aiRisk?.microphone;
+                  if (micActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
+                        {ai.mitre_technique && <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.15rem' }}>{ai.mitre_technique}</div>}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: micActive ? '#4ade80' : '#64748b' }}>{micActive ? 'NORMAL' : '—'}</span>
+                      {micActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.microphone})</span>}
+                    </>
+                  );
+                })()}
                 {micActive && micDet.pid && (
                   <button
                     disabled={killingProc === micDet.pid}
@@ -340,10 +404,26 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sLoc.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sLoc.status === 'ACTIVE' ? '#60a5fa' : '#64748b' }}>
-                  {sLoc.status === 'ACTIVE' ? 'LOW' : '—'}
-                </span>
-                {sLoc.status === 'ACTIVE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.location})</span>}
+                {(() => {
+                  const ai = aiRisk?.location;
+                  const isActive = sLoc.status === 'ACTIVE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#60a5fa' : '#64748b' }}>{isActive ? 'LOW' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.location})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -357,10 +437,27 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sClip.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sClip.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
-                  {sClip.status !== 'IDLE' ? 'HIGH' : '—'}
-                </span>
-                {sClip.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.clipboard})</span>}
+                {(() => {
+                  const ai = aiRisk?.clipboard;
+                  const isActive = sClip.status !== 'IDLE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#ffffff' : '#64748b' }}>{isActive ? 'HIGH' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.clipboard})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -374,10 +471,26 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sScreen.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sScreen.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
-                  {sScreen.status !== 'IDLE' ? 'HIGH' : '—'}
-                </span>
-                {sScreen.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.screen_capture})</span>}
+                {(() => {
+                  const ai = aiRisk?.screen_capture;
+                  const isActive = sScreen.status !== 'IDLE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#ffffff' : '#64748b' }}>{isActive ? 'HIGH' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.screen_capture})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -391,10 +504,27 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sKey.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sKey.status !== 'IDLE' ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>
-                  {sKey.status !== 'IDLE' ? 'CRITICAL' : '—'}
-                </span>
-                {sKey.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.keyboard})</span>}
+                {(() => {
+                  const ai = aiRisk?.keyboard;
+                  const isActive = sKey.status !== 'IDLE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#ffffff' : '#64748b', fontWeight: 'bold' }}>{isActive ? 'CRITICAL' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.keyboard})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -407,10 +537,26 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sNet.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sNet.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
-                  {sNet.status !== 'IDLE' ? 'NORMAL' : '—'}
-                </span>
-                {sNet.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.network})</span>}
+                {(() => {
+                  const ai = aiRisk?.network;
+                  const isActive = sNet.status !== 'IDLE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#ffffff' : '#64748b' }}>{isActive ? 'NORMAL' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.network})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -424,10 +570,26 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
               </td>
               <td style={{ padding: '0.75rem', color: '#94a3b8' }}>{sUsb.info}</td>
               <td style={{ padding: '0.75rem' }}>
-                <span style={{ color: sUsb.status !== 'IDLE' ? '#ffffff' : '#64748b' }}>
-                  {sUsb.status !== 'IDLE' ? 'LOW' : '—'}
-                </span>
-                {sUsb.status !== 'IDLE' && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.usb})</span>}
+                {(() => {
+                  const ai = aiRisk?.usb;
+                  const isActive = sUsb.status !== 'IDLE';
+                  if (isActive && ai) {
+                    const color = ai.risk_level === 'CRITICAL' ? '#dc2626' : ai.risk_level === 'HIGH' ? '#ef4444' : ai.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+                    return (
+                      <>
+                        <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <span style={{ color: isActive ? '#ffffff' : '#64748b' }}>{isActive ? 'LOW' : '—'}</span>
+                      {isActive && <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {risk.scores.usb})</span>}
+                    </>
+                  );
+                })()}
               </td>
             </tr>
 
@@ -468,14 +630,25 @@ function RiskRatingAlert({ risk }) {
   )
 }
 
-function RiskScorePanel({ risk }) {
+function RiskScorePanel({ risk, aiRisk }) {
   const { scores, isActive, maxScore, totalScore, rating, activeHighRiskSensors } = risk
   const ratingMeta = RISK_THRESHOLDS[rating] ?? RISK_THRESHOLDS.LOW
+
+  // Compute effective AI max score
+  const aiEntries = Object.entries(aiRisk || {});
+  const aiMaxScore = aiEntries.length > 0
+    ? Math.max(...aiEntries.map(([, a]) => a.risk_score || 0))
+    : null;
+  const aiMaxRating = aiMaxScore ? getRiskRating(aiMaxScore) : null;
+  const aiMaxMeta = aiMaxRating ? (RISK_THRESHOLDS[aiMaxRating] ?? RISK_THRESHOLDS.LOW) : null;
 
   return (
     <section className="info-panel lm-panel" style={{ marginBottom: '1rem' }}>
       <h2 className="panel-title" style={{ borderBottom: '1px solid #333333' }}>
         <span>📊</span> RISK SCORE MATRIX
+        {aiEntries.length > 0 && (
+          <span style={{ marginLeft: '0.75rem', fontSize: '0.65rem', padding: '0.15rem 0.5rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)', verticalAlign: 'middle' }}>AI-POWERED</span>
+        )}
       </h2>
 
       <div className="ds-table-wrap" style={{ marginTop: '0' }}>
@@ -493,10 +666,15 @@ function RiskScorePanel({ risk }) {
           <tbody>
             {Object.entries(SENSOR_RISK_WEIGHTS).map(([key, meta]) => {
               const active  = isActive[key]
-              const score   = scores[key]
-              const r       = getRiskRating(score)
-              const rMeta   = RISK_THRESHOLDS[r]
+              const ai      = aiRisk?.[key]
+              // Use AI scores when available
+              const score   = (active && ai?.risk_score) ? ai.risk_score : scores[key]
+              const lk      = (active && ai?.likelihood) ? ai.likelihood : (active ? meta.likelihood : 1)
+              const imp     = (active && ai?.impact) ? ai.impact : (active ? meta.impact : 1)
+              const r       = (active && ai?.risk_level) ? ai.risk_level : getRiskRating(score)
+              const rMeta   = RISK_THRESHOLDS[r] ?? RISK_THRESHOLDS.LOW
               const barPct  = Math.round((score / 25) * 100)
+              const desc    = (active && ai?.reasoning) ? ai.reasoning : meta.description
               return (
                 <tr
                   key={key}
@@ -509,12 +687,13 @@ function RiskScorePanel({ risk }) {
                   <td style={{ padding: '0.65rem 0.75rem', fontWeight: 500 }}>
                     {meta.icon} {meta.label}
                     {!active && <span style={{ marginLeft: '0.4rem', color: '#475569', fontSize: '0.72rem' }}>IDLE</span>}
+                    {active && ai && <span style={{ marginLeft: '0.4rem', fontSize: '0.6rem', padding: '0.05rem 0.3rem', background: 'rgba(139, 92, 246, 0.12)', color: '#a78bfa', borderRadius: '3px' }}>AI</span>}
                   </td>
                   <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center', color: '#94a3b8' }}>
-                    {active ? meta.likelihood : 1}
+                    {lk}
                   </td>
                   <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center', color: '#94a3b8' }}>
-                    {active ? meta.impact : 1}
+                    {imp}
                   </td>
                   <td style={{ padding: '0.65rem 0.75rem', textAlign: 'center' }}>
                     <div className="lm-score-bar-wrap" style={{ justifyContent: 'center' }}>
@@ -536,7 +715,7 @@ function RiskScorePanel({ risk }) {
                     }
                   </td>
                   <td style={{ padding: '0.65rem 0.75rem', fontSize: '0.75rem', color: '#64748b' }}>
-                    {meta.description}
+                    {desc}
                   </td>
                 </tr>
               )
@@ -548,13 +727,13 @@ function RiskScorePanel({ risk }) {
       {/* Overall risk summary bar */}
       <div className="lm-risk-overall">
         <div>
-          <div className="lm-risk-score-big" style={{ color: ratingMeta.color }}>
-            {maxScore}<span style={{ fontSize: '1rem', color: '#64748b' }}>/25</span>
+          <div className="lm-risk-score-big" style={{ color: (aiMaxMeta || ratingMeta).color }}>
+            {aiMaxScore ?? maxScore}<span style={{ fontSize: '1rem', color: '#64748b' }}>/25</span>
           </div>
-          <div className="lm-risk-score-label">Max Risk Score</div>
+          <div className="lm-risk-score-label">{aiMaxScore != null ? 'AI Max Risk Score' : 'Max Risk Score'}</div>
         </div>
         <div>
-          <div style={{ marginBottom: '0.3rem' }}>Overall Rating: <RiskBadge rating={rating} /></div>
+          <div style={{ marginBottom: '0.3rem' }}>Overall Rating: <RiskBadge rating={aiMaxRating || rating} /></div>
           <div className="lm-risk-score-label">Active sensor total: {totalScore} pts</div>
         </div>
         <div className="lm-risk-summary">
@@ -565,6 +744,59 @@ function RiskScorePanel({ risk }) {
           </p>
         </div>
       </div>
+
+      {/* AI Risk Assessments Detail */}
+      {aiEntries.length > 0 && (
+        <div style={{ borderTop: '1px solid #1e293b', padding: '1rem 0.75rem 0.5rem' }}>
+          <h3 style={{ fontSize: '0.82rem', color: '#a78bfa', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.9rem' }}>🤖</span> AI Risk Assessments
+            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>Powered by Grok</span>
+          </h3>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {aiEntries.map(([sensor, assessment]) => {
+              const color = assessment.risk_level === 'CRITICAL' ? '#dc2626' : assessment.risk_level === 'HIGH' ? '#ef4444' : assessment.risk_level === 'MEDIUM' ? '#f59e0b' : '#4ade80';
+              const sensorMeta = SENSOR_RISK_WEIGHTS[sensor];
+              const timeDiff = assessment.timestamp ? Math.round((Date.now() - new Date(assessment.timestamp).getTime()) / 1000) : null;
+              return (
+                <div key={sensor} style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid #1e293b', borderRadius: '8px', padding: '0.6rem 0.75rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                    <span>{sensorMeta?.icon || '🔹'}</span>
+                    <span style={{ fontWeight: 600, fontSize: '0.82rem' }}>{sensorMeta?.label || sensor}</span>
+                    <span style={{ color, fontWeight: 'bold', fontSize: '0.78rem', marginLeft: 'auto' }}>{assessment.risk_level}</span>
+                    <span style={{ fontSize: '0.72rem', color: '#64748b' }}>score: {assessment.risk_score}/25</span>
+                  </div>
+                  {assessment.process && (
+                    <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginBottom: '0.2rem' }}>
+                      Process: <span style={{ color: '#e2e8f0' }}>{assessment.process}</span>
+                    </div>
+                  )}
+                  {assessment.reasoning && (
+                    <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginBottom: '0.2rem' }}>
+                      {assessment.reasoning}
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '0.75rem', fontSize: '0.65rem', color: '#64748b', marginTop: '0.2rem' }}>
+                    {assessment.mitre_technique && (
+                      <span style={{ padding: '0.1rem 0.35rem', background: 'rgba(239, 68, 68, 0.1)', color: '#fca5a5', borderRadius: '3px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                        {assessment.mitre_technique}
+                      </span>
+                    )}
+                    {assessment.confidence != null && (
+                      <span>Confidence: {Math.round(assessment.confidence * 100)}%</span>
+                    )}
+                    {assessment.is_fallback && (
+                      <span style={{ color: '#f59e0b' }}>⚠ Fallback (API unavailable)</span>
+                    )}
+                    {timeDiff != null && (
+                      <span style={{ marginLeft: 'auto' }}>Assessed {timeDiff < 60 ? `${timeDiff}s` : `${Math.round(timeDiff / 60)}m`} ago</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </section>
   )
 }
@@ -857,7 +1089,7 @@ export default function LiveMonitorPage() {
   const [lastScan, setLastScan] = useState(null)
   const [countdown, setCountdown] = useState(REFRESH_INTERVAL)
 
-  const advancedSensors = useAdvancedSensors()
+  const { sensors: advancedSensors, riskAssessments: aiRisk } = useAdvancedSensors()
   const bgApps = useBackgroundWindowTitles()
   const detectedBrowsers = useDetectedBrowsers()
 
@@ -984,11 +1216,12 @@ export default function LiveMonitorPage() {
           bgApps={bgApps}
           advancedSensors={advancedSensors}
           risk={risk}
+          aiRisk={aiRisk}
         />
       )}
 
       {/* Risk Score Matrix Panel */}
-      {data && <RiskScorePanel risk={risk} />}
+      {data && <RiskScorePanel risk={risk} aiRisk={aiRisk} />}
 
       {/* Main content grid */}
       {data && (
