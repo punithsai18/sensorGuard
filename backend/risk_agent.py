@@ -1,11 +1,9 @@
 """
-SensorGuard — AI Risk Agent  (xAI Grok)
-=========================================
-Uses the OpenAI-compatible xAI API (api.x.ai) to evaluate
+SensorGuard — AI Risk Agent (OpenRouter)
+========================================
+Uses the OpenAI-compatible OpenRouter API to evaluate
 sensor access events and return intelligent risk scores with
 plain-English reasoning.
-
-The openai library is reused — only the base_url changes.
 """
 
 import json
@@ -15,10 +13,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Grok uses OpenAI-compatible API — just change base_url
+# OpenRouter uses the OpenAI-compatible interface 
 client = OpenAI(
-    api_key=os.getenv("XAI_API_KEY"),
-    base_url="https://api.x.ai/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    base_url="https://openrouter.ai/api/v1",
 )
 
 SYSTEM_PROMPT = """
@@ -118,12 +116,12 @@ FALLBACK_SCORES = {
 
 def assess_risk(context: dict) -> dict:
     """
-    Send the sensor context to xAI Grok for risk assessment.
+    Send the sensor context to OpenRouter for risk assessment.
     Falls back to conservative static scores on any failure.
     """
     try:
         response = client.chat.completions.create(
-            model=os.getenv("RISK_AGENT_MODEL", "grok-3-fast"),
+            model=os.getenv("RISK_AGENT_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
             max_tokens=int(os.getenv("RISK_AGENT_MAX_TOKENS", "400")),
             temperature=0,
             timeout=float(os.getenv("RISK_AGENT_TIMEOUT_SECONDS", "8")),
@@ -137,12 +135,20 @@ def assess_risk(context: dict) -> dict:
         )
 
         raw = response.choices[0].message.content.strip()
+        print(f"DEBUG: OpenRouter Response received ({len(raw)} chars)")
 
-        # Strip markdown code blocks if Grok wraps the response
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+        # Handle models that wrap JSON in markdown blocks
+        if "```" in raw:
+            parts = raw.split("```")
+            raw = parts[1] if len(parts) > 1 else raw
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+
+        # Fallback: extract substring between the first { and last }
+        start_idx = raw.find('{')
+        end_idx = raw.rfind('}')
+        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
+            raw = raw[start_idx:end_idx+1]
 
         assessment = json.loads(raw)
         assessment["_context"] = context
@@ -151,20 +157,40 @@ def assess_risk(context: dict) -> dict:
 
         return assessment
 
-    except json.JSONDecodeError:
-        fallback = FALLBACK_SCORES.get(
-            context.get("sensor_type", "camera"),
-            FALLBACK_SCORES["camera"],
-        ).copy()
+    except json.JSONDecodeError as e:
+        print(f"DEBUG: JSONDecodeError in assess_risk: {e}\nRaw output: {raw[:200]}...")
+        sensor = context.get("sensor_type", "unknown")
+        fallback = FALLBACK_SCORES.get(sensor, {
+            "risk_level": "MEDIUM",
+            "risk_score": 10,
+            "likelihood": 3,
+            "impact": 3,
+            "confidence": 0.5,
+            "reasoning": f"API unavailable (JSON Error) — generic MEDIUM risk default for {sensor} access.",
+            "mitre_technique": None,
+            "recommended_action": f"Monitor {sensor} activity.",
+            "is_false_positive": False,
+        }).copy()
         fallback["_context"] = context
         fallback["_fallback"] = True
         return fallback
 
     except Exception as e:
-        fallback = FALLBACK_SCORES.get(
-            context.get("sensor_type", "camera"),
-            FALLBACK_SCORES["camera"],
-        ).copy()
+        print(f"DEBUG: API Error in assess_risk: {e}")
+        import traceback
+        traceback.print_exc()
+        sensor = context.get("sensor_type", "unknown")
+        fallback = FALLBACK_SCORES.get(sensor, {
+            "risk_level": "MEDIUM",
+            "risk_score": 10,
+            "likelihood": 3,
+            "impact": 3,
+            "confidence": 0.5,
+            "reasoning": f"API unavailable ({type(e).__name__}: {str(e)}) — generic MEDIUM risk default for {sensor} access.",
+            "mitre_technique": None,
+            "recommended_action": f"Monitor {sensor} activity.",
+            "is_false_positive": False,
+        }).copy()
         fallback["_context"] = context
         fallback["_fallback"] = True
         fallback["_error"] = str(e)

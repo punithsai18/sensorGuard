@@ -325,7 +325,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                         {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
                         {ai.mitre_technique && <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.15rem' }}>{ai.mitre_technique}</div>}
                       </>
@@ -370,7 +370,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                         {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
                         {ai.mitre_technique && <div style={{ fontSize: '0.65rem', color: '#64748b', marginTop: '0.15rem' }}>{ai.mitre_technique}</div>}
                       </>
@@ -413,7 +413,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                       </>
                     );
                   }
@@ -446,7 +446,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                         {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
                       </>
                     );
@@ -480,7 +480,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                       </>
                     );
                   }
@@ -513,7 +513,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                         {ai.reasoning && <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '0.25rem' }}>{ai.reasoning}</div>}
                       </>
                     );
@@ -546,7 +546,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                       </>
                     );
                   }
@@ -579,7 +579,7 @@ function SensorStatusPanel({ camera, microphone, browserData, bgApps, advancedSe
                       <>
                         <span style={{ color, fontWeight: 'bold' }}>{ai.risk_level}</span>
                         <span style={{ marginLeft: '0.5rem', fontSize: '0.78rem', color: '#64748b' }}>(score: {ai.risk_score})</span>
-                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI · Grok</span>
+                        <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>AI Agent</span>
                       </>
                     );
                   }
@@ -750,7 +750,7 @@ function RiskScorePanel({ risk, aiRisk }) {
         <div style={{ borderTop: '1px solid #1e293b', padding: '1rem 0.75rem 0.5rem' }}>
           <h3 style={{ fontSize: '0.82rem', color: '#a78bfa', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <span style={{ fontSize: '0.9rem' }}>🤖</span> AI Risk Assessments
-            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>Powered by Grok</span>
+            <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', background: 'rgba(139, 92, 246, 0.15)', color: '#a78bfa', borderRadius: '4px', border: '1px solid rgba(139, 92, 246, 0.3)' }}>Powered by NVIDIA Model</span>
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             {aiEntries.map(([sensor, assessment]) => {

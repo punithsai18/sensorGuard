@@ -13,6 +13,12 @@ try:
 except ImportError:
     def log_event(*args): pass
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables explicitly from the project root
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+
 # AI Risk Agent imports
 try:
     from backend.context_builder import build_sensor_context
@@ -540,6 +546,14 @@ async def register(websocket):
 async def main():
     # Initialize training database on startup
     if AI_RISK_AVAILABLE:
+        key = os.getenv("OPENROUTER_API_KEY")
+        model = os.getenv("RISK_AGENT_MODEL")
+        print(f"\n[AI Risk Agent] Startup Status:")
+        print(f"  - Key Found: {'YES' if key else 'NO (Check .env)'}")
+        if key: print(f"  - Key starts with: {key[:14]}...")
+        print(f"  - Model: {model}")
+        print(f"  - AI Risk Agent imports: OK\n")
+        
         try:
             await asyncio.to_thread(init_training_db)
             logger.info("AI Risk Agent initialized — training DB ready")
