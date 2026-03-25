@@ -28,3 +28,12 @@ dist-ssr
 
 # Training data
 data/
+
+# Databases
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+forensic.db
+.salt
+forensic_config.json

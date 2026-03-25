@@ -5,6 +5,7 @@ import SitePermissionsPage from './SitePermissionsPage.jsx'
 import LiveMonitorPage from './LiveMonitorPage.jsx'
 import ScreenTimePage from './ScreenTimePage.jsx'
 import TimelinePage from './TimelinePage.jsx'
+import SettingsPage from './SettingsPage.jsx'
 
 // --- Hooks ---
 
@@ -345,6 +346,12 @@ function App() {
           >
             🕰️ Timeline
           </button>
+          <button
+            className={`nav-tab${page === 'settings' ? ' active' : ''}`}
+            onClick={() => setPage('settings')}
+          >
+            ⚙️ Privacy & Forensics
+          </button>
         </nav>
       </header>
 
@@ -358,6 +365,8 @@ function App() {
         <ScreenTimePage />
       ) : page === 'timeline' ? (
         <TimelinePage />
+      ) : page === 'settings' ? (
+        <SettingsPage />
       ) : (
         <main className="sensor-grid">
           {/* Screen Time Summary */}

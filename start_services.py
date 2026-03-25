@@ -207,7 +207,53 @@ signal.signal(signal.SIGTERM, _handle_signal)
 # Entry point
 # ---------------------------------------------------------------------------
 
+def start_forensic_system():
+    from backend.forensic_db import init_db
+    from backend.forensic_config import load_config
+    from backend.db_maintenance import run_maintenance
+    from backend.forensic_hasher import get_salt
+    import schedule
+    import threading
+    import time
+
+    # Initialize salt (generates if first run)
+    get_salt()
+    
+    # Initialize database tables
+    init_db()
+    
+    # Run maintenance immediately on startup
+    # to clear any expired rows from last session
+    run_maintenance()
+    
+    # Schedule daily maintenance at midnight
+    schedule.every().day.at("00:00").do(run_maintenance)
+    
+    # Run scheduler in background thread
+    def run_scheduler():
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+    
+    scheduler_thread = threading.Thread(
+        target=run_scheduler,
+        daemon=True
+    )
+    scheduler_thread.start()
+    
+    print("[ForensicDB] Initialized successfully")
+    cfg = load_config()
+    print(f"[ForensicDB] Layer 1 (permissions): ON")
+    print(f"[ForensicDB] Layer 2 (tamper detect): {'ON' if cfg['history_tamper_detection_enabled'] else 'OFF'}")
+    print(f"[ForensicDB] Layer 3 (diff storage): {'ON' if cfg['differential_storage_enabled'] else 'OFF'}")
+
 def main() -> None:
+    # Initialize the forensic system before starting the services
+    try:
+        start_forensic_system()
+    except Exception as e:
+        print(f"[ForensicDB] Failed to initialize: {e}")
+
     print(
         f"\n{_BOLD}{'=' * 60}\n"
         f"  SensorGuard Python Services Orchestrator\n"

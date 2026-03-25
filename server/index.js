@@ -156,7 +156,7 @@ app.get('/api/screentime', (req, res) => {
           hours[h].apps.push({ name: row.app_name, seconds: row.seconds, exe_path: row.exe_path });
           hours[h].total_seconds += row.seconds;
         }
-        
+
         const baseApp = row.app_name.includes('::') ? row.app_name.split('::')[0] : row.app_name;
         if (!summaryMap[baseApp]) summaryMap[baseApp] = { seconds: 0, exe_path: row.exe_path };
         summaryMap[baseApp].seconds += row.seconds;
@@ -180,7 +180,7 @@ app.get('/api/screentime', (req, res) => {
       try {
         const { execSync } = require('child_process');
         const pythonPath = process.platform === 'win32' ? 'python' : 'python3';
-        
+
         summary.forEach(app => {
           try {
             // This is a bit slow for a REST API, but it follows the requirement to use the Python extractor.
@@ -240,7 +240,7 @@ app.get('/api/screentime/history', (req, res) => {
       rows.forEach(row => {
         const d = row.day;
         if (!daysMap[d]) daysMap[d] = { date: d, apps: [], total_seconds: 0 };
-        
+
         daysMap[d].apps.push({ name: row.app_name, seconds: row.seconds });
         daysMap[d].total_seconds += row.seconds;
 
