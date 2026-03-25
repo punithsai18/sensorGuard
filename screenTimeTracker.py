@@ -12,14 +12,31 @@ from watchdog.events import FileSystemEventHandler
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
+
+try:
+    from timeline_logger import log_event
+except ImportError:
+    def log_event(*args, **kwargs): pass
 
 try:
     import ctypes
+    from ctypes import wintypes
     user32 = ctypes.windll.user32
     kernel32 = ctypes.windll.kernel32
     IS_WINDOWS = True
 except Exception:
     IS_WINDOWS = False
+
+# Ensure websockets and its exceptions are available
+try:
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+except ImportError:
+    try:
+        from websockets import ConnectionClosed
+    except ImportError:
+        ConnectionClosed = Exception
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ScreenTimeTracker")
@@ -28,15 +45,40 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "screen_time.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Check if we need to migrate
+    cursor.execute("PRAGMA table_info(screen_time_sessions)")
+    columns = [c[1] for c in cursor.fetchall()]
+    
+    # If the old schema is detected (it has 'total_seconds' but not 'timestamp')
+    if columns and "total_seconds" in columns and "timestamp" not in columns:
+        logger.info("Detected old Screen Time schema. Migrating to session-based format...")
+        try:
+            cursor.execute("DROP TABLE screen_time_sessions")
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Migration error: {e}")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS screen_time_sessions (
-            date TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
             app_name TEXT,
-            total_seconds INTEGER DEFAULT 0,
-            last_seen TEXT,
-            PRIMARY KEY (date, app_name)
+            duration_seconds INTEGER,
+            exe_path TEXT
         )
     """)
+    # Migration: Add exe_path if it doesn't exist
+    try:
+        cursor.execute("PRAGMA table_info(screen_time_sessions)")
+        cols = [c[1] for c in cursor.fetchall()]
+        if "exe_path" not in cols:
+            cursor.execute("ALTER TABLE screen_time_sessions ADD COLUMN exe_path TEXT")
+            conn.commit()
+            logger.info("Migrated screen_time_sessions to include exe_path column.")
+    except Exception as e:
+        logger.error(f"Migration error (exe_path): {e}")
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS timeline_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,6 +123,10 @@ BROWSER_PREFS = {
 }
 
 clients = set()
+last_db_write = time.time()
+last_active_app = None
+LATEST_DATA = {"event": "screen_time", "date": datetime.now().strftime("%Y-%m-%d"), "data": []}
+
 
 # WATCHDOG FOR PREFERENCES
 class PrefsFileHandler(FileSystemEventHandler):
@@ -130,7 +176,7 @@ def get_idle_time_windows():
 def get_active_window_info():
     if not IS_WINDOWS:
         # Dummy fallback for non-windows
-        return "Unknown OS", "Unknown Window", 0
+        return "Unknown OS", "Unknown Window", 0, None
     
     try:
         hwnd = user32.GetForegroundWindow()
@@ -147,11 +193,13 @@ def get_active_window_info():
         try:
             p = psutil.Process(pid.value)
             name = p.name()
+            exe_path = p.exe()
         except:
             name = "Unknown"
-        return name, title, pid.value
+            exe_path = None
+        return name, title, pid.value, exe_path
     except:
-        return None, None, 0
+        return None, None, 0, None
 
 def clean_app_name(name, title):
     if not name: return "Unknown"
@@ -182,80 +230,116 @@ def get_website_from_title(app_name, title):
             return site
     return None
 
-screen_time_buffer = {}
-last_db_write = time.time()
+screen_time_buffer = {}  # Key: (ts_minute, record_name, exe_path), Value: seconds
 
-def flush_screen_time_buffer():
+def flush_screen_time_buffer_sync():
+    global screen_time_buffer
     if not screen_time_buffer:
         return
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        for (date, app_name), data in list(screen_time_buffer.items()):
+        # Create a copy to avoid mutation during threading
+        current_items = list(screen_time_buffer.items())
+        for (ts, record_name, exe_path), seconds in current_items:
             cursor.execute("""
-                INSERT INTO screen_time_sessions (date, app_name, total_seconds, last_seen)
+                INSERT INTO screen_time_sessions (timestamp, app_name, duration_seconds, exe_path)
                 VALUES (?, ?, ?, ?)
-                ON CONFLICT(date, app_name) DO UPDATE SET 
-                    total_seconds = total_seconds + ?,
-                    last_seen = ?
-            """, (date, app_name, data["seconds"], data["last_seen"], data["seconds"], data["last_seen"]))
+            """, (ts, record_name, seconds, exe_path))
         conn.commit()
         conn.close()
-        screen_time_buffer.clear()
+        
+        # Clear the items we just wrote
+        for key, _ in current_items:
+            if key in screen_time_buffer:
+                del screen_time_buffer[key]
     except Exception as e:
         logger.error(f"Error storing screen time: {e}")
 
 async def screen_time_loop():
-    global last_db_write
+    global last_db_write, last_active_app, LATEST_DATA
     while True:
         await asyncio.sleep(1)
-        idle_time = get_idle_time_windows() if IS_WINDOWS else 0
+        # Use to_thread for the blocking OS calls
+        idle_time = await asyncio.to_thread(get_idle_time_windows) if IS_WINDOWS else 0
         if idle_time > 60:
+            if last_active_app:
+                # User went idle
+                asyncio.create_task(asyncio.to_thread(log_event, "SYSTEM", "User State", "User is now idle"))
+                last_active_app = None
             continue  # User is idle, don't count
             
-        app_exe, title, pid = get_active_window_info()
-        if not app_exe: continue
+        res = await asyncio.to_thread(get_active_window_info)
+        if not res or not res[0]: continue
+        app_exe, title, pid, exe_path = res
         
         app_name = clean_app_name(app_exe, title)
         website = get_website_from_title(app_name, title)
         
-        # We store website tracking under the app_name artificially for simplicity:
-        # e.g., 'Google Chrome::youtube.com'
         record_name = app_name
         if website:
             record_name = f"{app_name}::{website}"
             
-        today = datetime.now().strftime("%Y-%m-%d")
-        now_str = datetime.now().isoformat()
+        # Log focus change to timeline
+        current_focus = record_name if not website else f"{app_name} ({website})"
+        if current_focus != last_active_app:
+            asyncio.create_task(asyncio.to_thread(log_event, "APP", app_name, f"Focused on: {title or app_name}"))
+            last_active_app = current_focus
+
+        # Use a timestamp rounded to the minute for the buffer key
+        now = datetime.now()
+        ts_minute = now.strftime("%Y-%m-%d %H:%M:00")
         
-        key = (today, record_name)
-        if key not in screen_time_buffer:
-            screen_time_buffer[key] = {"seconds": 0, "last_seen": now_str}
-            
-        screen_time_buffer[key]["seconds"] += 1
-        screen_time_buffer[key]["last_seen"] = now_str
+        key = (ts_minute, record_name, exe_path)
+        screen_time_buffer[key] = screen_time_buffer.get(key, 0) + 1
         
         # Write to database periodically
         if time.time() - last_db_write >= 15:
-            flush_screen_time_buffer()
+            await asyncio.to_thread(flush_screen_time_buffer_sync)
+            # Update cache after flush
+            today, data = await asyncio.to_thread(get_screen_time_data_sync)
+            LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
             last_db_write = time.time()
 
+def get_screen_time_data_sync():
+    conn = sqlite3.connect(DB_PATH)
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Aggregate by app_name for the real-time daily view
+    query = """
+        SELECT app_name, SUM(duration_seconds), MAX(timestamp), exe_path
+        FROM screen_time_sessions 
+        WHERE date(timestamp) = ? 
+        GROUP BY app_name 
+        ORDER BY SUM(duration_seconds) DESC
+    """
+    rows = conn.execute(query, (today,)).fetchall()
+    data = [{"app": r[0], "time": r[1], "last_seen": r[2], "exe_path": r[3]} for r in rows]
+    
+    # PART 3: ADD ICONS TO RESPONSE
+    # (Since this is Python, we can call it directly)
+    try:
+        from backend.icon_extractor import get_app_icon
+        for entry in data:
+            entry["icon"] = get_app_icon(entry["app"], entry["exe_path"])
+    except ImportError:
+        pass
+        
+    conn.close()
+    return today, data
+
 async def push_screen_time():
+    global LATEST_DATA
+    # Initial load of cache
+    today, data = await asyncio.to_thread(get_screen_time_data_sync)
+    LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
+    
     while True:
         await asyncio.sleep(60)
-        flush_screen_time_buffer() # Ensure latest data is written before read
+        await asyncio.to_thread(flush_screen_time_buffer_sync)
+        today, data = await asyncio.to_thread(get_screen_time_data_sync)
+        LATEST_DATA = {"event": "screen_time", "date": today, "data": data}
         
-        conn = sqlite3.connect(DB_PATH)
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
-        
-        data = []
-        for r in rows:
-            data.append({"app": r[0], "time": r[1], "last_seen": r[2]})
-            
-        conn.close()
-        
-        msg = json.dumps({"event": "screen_time", "date": today, "data": data})
+        msg = json.dumps(LATEST_DATA)
         for ws in list(clients):
             try: await ws.send(msg)
             except: pass
@@ -263,18 +347,15 @@ async def push_screen_time():
 async def register(websocket):
     clients.add(websocket)
     try:
-        # Push initial screen time
-        flush_screen_time_buffer()
-        conn = sqlite3.connect(DB_PATH)
-        today = datetime.now().strftime("%Y-%m-%d")
-        rows = conn.execute("SELECT app_name, total_seconds, last_seen FROM screen_time_sessions WHERE date = ? ORDER BY total_seconds DESC", (today,)).fetchall()
-        data = [{"app": r[0], "time": r[1], "last_seen": r[2]} for r in rows]
-        conn.close()
-        await websocket.send(json.dumps({"event": "screen_time", "date": today, "data": data}))
-        
+        await websocket.send(json.dumps(LATEST_DATA))
         await websocket.wait_closed()
+    except ConnectionClosed:
+        pass
+    except Exception:
+        pass
     finally:
-        clients.remove(websocket)
+        if websocket in clients:
+            clients.remove(websocket)
 
 async def main():
     observer = Observer()
@@ -295,6 +376,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8998)
     async with websockets.serve(register, "127.0.0.1", 8998, process_request=process_request):
         logger.info("Screen Time Tracker running on ws://127.0.0.1:8998")
         await asyncio.Future()

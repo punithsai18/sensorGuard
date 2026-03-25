@@ -15,6 +15,181 @@ export default function ScreenTimePage() {
     const [dailyGoalMinutes, setDailyGoalMinutes] = useState(120); // 2 hours default
     const [isEditingGoal, setIsEditingGoal] = useState(false);
 
+    // PART 2 & 3 & 4: REST CHART STATE
+    const [viewMode, setViewMode] = useState('1D');
+    const [chartData, setChartData] = useState([]);
+    const [chartSummary, setChartSummary] = useState([]);
+    const [tooltip, setTooltip] = useState(null);
+    const [activeCol, setActiveCol] = useState(null); // For fixed detail box
+    const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+    const appColorsFixed = {
+        'Google Chrome': '#4285F4',
+        'VS Code': '#007ACC',
+        'File Explorer': '#FFA500',
+        'Other': '#888888'
+    };
+
+    const top5Names = useMemo(() => {
+        return chartSummary.slice(0, 5).map(s => s.name);
+    }, [chartSummary]);
+
+    const getChartAppColor = (appName) => {
+        if (appColorsFixed[appName]) return appColorsFixed[appName];
+        if (!top5Names.includes(appName)) return '#888888';
+        const dynamicColors = ['#10b981', '#8b5cf6', '#f43f5e', '#0ea5e9', '#f59e0b'];
+        let assigned = 0;
+        for (const name of top5Names) {
+            if (name === appName) break;
+            if (!appColorsFixed[name]) assigned++;
+        }
+        return dynamicColors[assigned % dynamicColors.length];
+    };
+
+    const localDateStr = (dateObj) => {
+        const y = dateObj.getFullYear();
+        const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+        const d = String(dateObj.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    };
+
+    useEffect(() => {
+        const fetchChartData = async () => {
+            try {
+                let url;
+                if (viewMode === '1D') {
+                    url = `http://localhost:3005/api/screentime`;
+                } else {
+                    const daysCount = viewMode === '3D' ? 3 : 7;
+                    url = `http://localhost:3005/api/screentime/history?days=${daysCount}`;
+                }
+
+                const res = await fetch(url);
+                const json = await res.json();
+
+                if (viewMode === '1D') {
+                    setChartData(json.hours || []);
+                } else {
+                    setChartData(json.days || []);
+                }
+                setChartSummary(json.summary || []);
+            } catch (err) {
+                console.error("Failed to load chart data", err);
+            }
+        };
+
+        fetchChartData();
+        const interval = setInterval(fetchChartData, 15000); // Higher resolution live updates
+        return () => clearInterval(interval);
+    }, [viewMode]);
+
+    const W = 800;
+    const H = 200;
+    const PADDING_L = 40; // More space for Y labels
+    const PADDING_B = 25;
+    const PADDING_R = 15;
+
+    const maxDataVal = Math.max(1, ...chartData.map(d => Math.ceil((d.total_seconds || 0) / 60)));
+    const maxY = Math.ceil(maxDataVal / 5) * 5 + 5; // Snap to nearest 5m with buffer
+
+    const numCols = viewMode === '1D' ? 24 : (viewMode === '3D' ? 3 : 7);
+    const colWidth = (W - PADDING_L - PADDING_R) / numCols;
+    const gap = viewMode === '1D' ? 2 : Math.min(colWidth * 0.2, 40);
+    const barW = Math.max(1, colWidth - gap);
+
+    const labels = useMemo(() => {
+        if (viewMode === '1D') {
+            return Array.from({ length: 24 }, (_, i) => {
+                const hourNum = i % 12 || 12;
+                const ampm = i < 12 ? 'am' : 'pm';
+                return {
+                    index: i,
+                    label: i % 4 === 0 ? `${hourNum}${ampm}` : '',
+                    fullLabel: `${hourNum}:00 ${ampm}`,
+                    data: chartData[i]
+                };
+            });
+        }
+
+        const daysCount = viewMode === '3D' ? 3 : 7;
+        const todayAtMidnight = new Date();
+        return Array.from({ length: daysCount }, (_, i) => {
+            const diffIdx = daysCount - 1 - i;
+            const d = new Date(todayAtMidnight.getTime() - diffIdx * 24 * 60 * 60 * 1000);
+            const dateStr = localDateStr(d);
+            return {
+                index: i,
+                label: diffIdx === 0 ? 'Today' : d.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' }),
+                fullLabel: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                data: chartData.find(cd => cd.date === dateStr)
+            };
+        });
+    }, [viewMode, chartData]);
+
+    const renderBars = () => {
+        return labels.map((col, i) => {
+            const x = PADDING_L + i * colWidth + gap / 2;
+            const isActive = activeCol?.index === i;
+
+            const colClickArea = (
+                <rect
+                    key={`hit-${i}`}
+                    x={x - gap / 2} y={0} width={colWidth} height={H - PADDING_B}
+                    fill="transparent"
+                    onMouseEnter={() => setActiveCol(col)}
+                    onMouseLeave={() => setActiveCol(null)}
+                    style={{ cursor: 'pointer' }}
+                />
+            );
+
+            if (!col.data || !col.data.apps || col.data.apps.length === 0) {
+                return (
+                    <g key={`col-empty-${i}`}>
+                        <rect x={x} y={H - PADDING_B - 2} width={barW} height={2} fill="#334155" opacity={activeCol ? 0.1 : 0.3} />
+                        {colClickArea}
+                    </g>
+                );
+            }
+
+            let yOffset = 0;
+            const appsInCol = col.data.apps;
+            const grouped = [];
+            let otherSecs = 0;
+
+            for (const a of appsInCol) {
+                if (top5Names.includes(a.name) || appColorsFixed[a.name]) {
+                    grouped.push(a);
+                } else {
+                    otherSecs += a.seconds;
+                }
+            }
+            if (otherSecs > 0) {
+                grouped.push({ name: 'Other', seconds: otherSecs });
+            }
+
+            return (
+                <g key={`col-${i}`} style={{ opacity: activeCol && !isActive ? 0.3 : 1, transition: 'opacity 0.3s' }}>
+                    {grouped.map((app, j) => {
+                        const mins = app.seconds / 60;
+                        const hBar = Math.max(2, (mins / Math.max(maxY, 1)) * (H - PADDING_B - 20));
+                        const yBar = H - PADDING_B - yOffset - hBar;
+                        yOffset += hBar;
+                        return (
+                            <rect
+                                key={`part-${i}-${j}`}
+                                x={x} y={yBar} width={barW} height={hBar}
+                                fill={getChartAppColor(app.name)}
+                                rx={j === grouped.length - 1 ? 2 : 0}
+                                style={{ transition: 'opacity 0.2s ease', pointerEvents: 'none' }}
+                            />
+                        );
+                    })}
+                    {colClickArea}
+                </g>
+            );
+        });
+    };
+
     const exportToCSV = () => {
         const headers = ["Application", "Time Used (seconds)", "Last Seen"];
         const rows = screenTimeData.map(row => `${row.app},${row.time},${row.last_seen || ''}`);
@@ -126,7 +301,7 @@ export default function ScreenTimePage() {
     }
 
     // Aggregate Top Apps vs Top Websites
-    const topAppsMap = {};
+    const topAppsData = {}; // name -> { time, icon }
     const webActivityMap = {};
 
     for (const row of screenTimeData) {
@@ -135,15 +310,24 @@ export default function ScreenTimePage() {
             const parentApp = parts[0];
             const website = parts[1];
 
-            topAppsMap[parentApp] = (topAppsMap[parentApp] || 0) + row.time;
+            if (!topAppsData[parentApp]) {
+                topAppsData[parentApp] = { time: 0, icon: row.icon };
+            }
+            topAppsData[parentApp].time += row.time;
+            
             if (!webActivityMap[parentApp]) webActivityMap[parentApp] = [];
             webActivityMap[parentApp].push({ site: website, time: row.time });
         } else {
-            topAppsMap[row.app] = (topAppsMap[row.app] || 0) + row.time;
+            if (!topAppsData[row.app]) {
+                topAppsData[row.app] = { time: 0, icon: row.icon };
+            }
+            topAppsData[row.app].time += row.time;
         }
     }
 
-    const sortedApps = Object.entries(topAppsMap).sort((a, b) => b[1] - a[1]);
+    const sortedApps = Object.entries(topAppsData)
+        .sort((a, b) => b[1].time - a[1].time)
+        .map(([name, data]) => ({ name, time: data.time, icon: data.icon }));
 
     const displayedApps = showAllProcesses ? sortedApps : sortedApps.slice(0, 5);
 
@@ -181,7 +365,47 @@ export default function ScreenTimePage() {
                                 ) : (
                                     <span className="st-reconnecting-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#94a3b8', padding: '4px 8px', borderRadius: '4px', fontSize: '12px' }}>⚠ Reconnecting...</span>
                                 )}
-                                <button onClick={exportToCSV} style={{ padding: '4px 10px', fontSize: '12px' }}>Export to CSV</button>
+                                <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                    <button
+                                        onClick={exportToCSV}
+                                        style={{ background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid rgba(255,255,255,0.2)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                                    >
+                                        Export to CSV
+                                    </button>
+
+                                    {!showResetConfirm ? (
+                                        <button
+                                            onClick={() => setShowResetConfirm(true)}
+                                            style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#fee2e2', border: '1px solid rgba(239, 68, 68, 0.3)', padding: '4px 12px', borderRadius: '6px', fontSize: '12px', cursor: 'pointer' }}
+                                        >
+                                            Reset History
+                                        </button>
+                                    ) : (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(239, 68, 68, 0.1)', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
+                                            <span style={{ fontSize: '10px', color: '#fca5a5', fontWeight: 'bold' }}>Sure?</span>
+                                            <button
+                                                onClick={async () => {
+                                                    try {
+                                                        await fetch('http://localhost:3005/api/screentime/reset', { method: 'POST' });
+                                                        setChartData([]);
+                                                        setChartSummary([]);
+                                                        setScreenTimeData([]);
+                                                        setShowResetConfirm(false);
+                                                    } catch (e) { console.error(e); }
+                                                }}
+                                                style={{ background: '#ef4444', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+                                            >
+                                                YES
+                                            </button>
+                                            <button
+                                                onClick={() => setShowResetConfirm(false)}
+                                                style={{ background: '#475569', color: 'white', border: 'none', padding: '2px 8px', borderRadius: '4px', fontSize: '10px', fontWeight: 'bold', cursor: 'pointer' }}
+                                            >
+                                                NO
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                             <h1>Screen Activity</h1>
 
@@ -228,53 +452,192 @@ export default function ScreenTimePage() {
                     </div>
 
                     <div className="st-date-nav">
-                        <button className="st-nav-btn">&larr;</button>
-                        <div className="st-current-date">
-                            <span>{new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}</span>
-                            <small>Today</small>
+                        <div className="st-view-toggle" style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.3)', padding: '4px', borderRadius: '6px' }}>
+                            <button
+                                onClick={() => setViewMode('1D')}
+                                style={{ padding: '6px 16px', background: viewMode === '1D' ? '#475569' : 'transparent', color: viewMode === '1D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                1D
+                            </button>
+                            <button
+                                onClick={() => setViewMode('3D')}
+                                style={{ padding: '6px 16px', background: viewMode === '3D' ? '#475569' : 'transparent', color: viewMode === '3D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                3D
+                            </button>
+                            <button
+                                onClick={() => setViewMode('7D')}
+                                style={{ padding: '6px 16px', background: viewMode === '7D' ? '#475569' : 'transparent', color: viewMode === '7D' ? 'white' : '#94a3b8', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold' }}>
+                                7D
+                            </button>
                         </div>
-                        <button className="st-nav-btn" disabled>&rarr;</button>
                     </div>
                 </div>
             </div>
 
             <div className="st-content-grid">
-                {/* Visual Chart Card */}
                 <div className="st-card st-chart-card">
                     <div className="st-card-header">
-                        <h3><span>📊</span> Activity Distribution</h3>
+                        <div>
+                            <h3><span>📊</span> Activity Timeline</h3>
+                            <p style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+                                {viewMode === '1D' ? 'Hourly breakdown of application usage today' : `Daily usage over the last ${viewMode === '3D' ? '3' : '7'} days`}
+                            </p>
+                        </div>
                     </div>
-                    <div className="st-chart-wrapper" style={{ display: 'flex', flexDirection: 'column', padding: '1rem', minHeight: '150px' }}>
-                        {totalSeconds === 0 ? (
-                            <div className="st-empty-state" style={{ margin: 'auto' }}>
-                                <p>No data recorded yet.</p>
-                            </div>
-                        ) : (
-                            <>
-                                <div style={{ display: 'flex', width: '100%', height: '40px', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#334155' }}>
-                                    {sortedApps.map(([appName, time]) => {
-                                        const percent = (time / totalSeconds) * 100;
-                                        if (percent < 0.5) return null; // Too small to render cleanly
-                                        return (
-                                            <div
-                                                key={appName}
-                                                style={{ width: `${percent}%`, height: '100%', backgroundColor: stringToColor(appName), borderRight: '1px solid rgba(0,0,0,0.2)', position: 'relative' }}
-                                                title={`${appName}: ${formatTime(time)} (${percent.toFixed(1)}%)`}
-                                            />
-                                        );
-                                    })}
+
+                    <div className="st-chart-wrapper" style={{ padding: '1.5rem 1rem 1rem 0.5rem', position: 'relative' }}>
+                        <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
+                            {/* Grid Gradient BG */}
+                            <defs>
+                                <linearGradient id="gridGrad" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="rgba(59, 130, 246, 0.05)" />
+                                    <stop offset="100%" stopColor="transparent" />
+                                </linearGradient>
+                            </defs>
+                            <rect x={PADDING_L} y={20} width={W - PADDING_L - PADDING_R} height={H - PADDING_B - 20} fill="url(#gridGrad)" rx="8" style={{ pointerEvents: 'none' }} />
+
+                            {/* Y axis steps */}
+                            {[0, 0.5, 1].map(pct => {
+                                const val = Math.round(pct * maxY);
+                                const yLine = H - PADDING_B - pct * (H - PADDING_B - 20);
+                                return (
+                                    <g key={`y-${pct}`}>
+                                        <line x1={PADDING_L} y1={yLine} x2={W - PADDING_R} y2={yLine} stroke="#1e293b" opacity="0.6" strokeDasharray="4 4" />
+                                        <text x={PADDING_L - 8} y={yLine + 4} fill="#64748b" fontSize="10" fontWeight="600" textAnchor="end">{val}m</text>
+                                    </g>
+                                );
+                            })}
+
+                            {/* Bars */}
+                            {renderBars()}
+
+                            {/* Active Indicator Line (Crosshair) */}
+                            {activeCol && (
+                                <line
+                                    x1={PADDING_L + activeCol.index * colWidth + colWidth / 2}
+                                    y1={20}
+                                    x2={PADDING_L + activeCol.index * colWidth + colWidth / 2}
+                                    y2={H - PADDING_B}
+                                    stroke="rgba(255,255,255,0.3)"
+                                    strokeWidth="1.5"
+                                    strokeDasharray="4 2"
+                                    style={{ pointerEvents: 'none' }}
+                                />
+                            )}
+
+                            {/* X axis labels */}
+                            {labels.map((col, i) => col.label ? (
+                                <text key={`x-${i}`} x={PADDING_L + i * colWidth + gap / 2 + barW / 2} y={H - 2} fill={activeCol?.index === i ? '#e2e8f0' : '#475569'} fontSize="10" fontWeight="700" textAnchor="middle" style={{ transition: 'fill 0.2s' }}>
+                                    {col.label}
+                                </text>
+                            ) : null)}
+                        </svg>
+
+                        {/* Fixed Detail Box */}
+                        <div className="st-fixed-detail-box" style={{
+                            height: '190px',
+                            marginTop: '1.5rem',
+                            background: 'rgba(10, 15, 28, 0.95)',
+                            backdropFilter: 'blur(20px)',
+                            borderRadius: '24px',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            padding: '1.5rem 2.25rem',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            justifyContent: 'center',
+                            transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+                            boxShadow: activeCol ? '0 15px 45px -10px rgba(59, 130, 246, 0.4)' : 'none',
+                            position: 'relative',
+                            overflow: 'hidden'
+                        }}>
+                            {!activeCol ? (
+                                <div style={{ color: '#64748b', fontSize: '0.95rem', fontStyle: 'italic', textAlign: 'center', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                                    <div style={{ width: '36px', height: '36px', borderRadius: '50%', background: 'rgba(59, 130, 246, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                        <span style={{ fontSize: '1.2rem' }}>📊</span>
+                                    </div>
+                                    Hover over the timeline to view session details
                                 </div>
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
-                                    {sortedApps.slice(0, 8).map(([appName, time]) => (
-                                        <div key={appName} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                                            <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: stringToColor(appName) }}></div>
-                                            <span style={{ color: '#e2e8f0' }}>{appName}</span>
-                                            <span style={{ color: '#94a3b8' }}>{Math.round((time / totalSeconds) * 100)}%</span>
+                            ) : (
+                                <>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid rgba(255,255,255,0.06)', paddingBottom: '0.75rem' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 12px rgba(59, 130, 246, 0.6)', animation: 'pulse 2s infinite' }} />
+                                            <span style={{ color: '#ffffff', fontWeight: '800', fontSize: '1.25rem', letterSpacing: '-0.02em', lineHeight: 1 }}>{activeCol.fullLabel}</span>
                                         </div>
-                                    ))}
-                                </div>
-                            </>
-                        )}
+                                        <div style={{ textAlign: 'right' }}>
+                                            <span style={{ color: '#475569', fontSize: '0.65rem', fontWeight: '800', textTransform: 'uppercase', display: 'block', marginBottom: '2px', letterSpacing: '0.08em' }}>Session Duration</span>
+                                            <span style={{ color: '#3b82f6', fontWeight: '900', fontSize: '1.15rem', display: 'block', lineHeight: 1 }}>{formatTime(activeCol.data?.total_seconds || 0)}</span>
+                                        </div>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem 3rem' }}>
+                                        {(() => {
+                                            const apps = [...(activeCol.data?.apps || [])].sort((a, b) => b.seconds - a.seconds);
+                                            const displayList = apps.slice(0, 4);
+                                            const total = activeCol.data?.total_seconds || 1;
+
+                                            return displayList.map((app, idx) => (
+                                                <div key={idx} className="st-detail-app-card" style={{
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    gap: '6px',
+                                                    minWidth: 0
+                                                }}>
+                                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: '700' }}>
+                                                        <span style={{ color: '#e2e8f0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '75%' }}>{app.name.split('.')[0]}</span>
+                                                        <span style={{ color: '#94a3b8' }}>{formatTime(app.seconds)}</span>
+                                                    </div>
+                                                    <div style={{ height: '5px', background: 'rgba(255,255,255,0.04)', borderRadius: '100px', overflow: 'hidden', position: 'relative' }}>
+                                                        <div style={{
+                                                            height: '100%',
+                                                            width: `${(app.seconds / total) * 100}%`,
+                                                            background: getChartAppColor(app.name),
+                                                            boxShadow: `0 0 10px ${getChartAppColor(app.name)}44`,
+                                                            borderRadius: '100px',
+                                                            transition: 'width 1s cubic-bezier(0.16, 1, 0.3, 1)'
+                                                        }} />
+                                                    </div>
+                                                </div>
+                                            ));
+                                        })()}
+                                        {(!activeCol.data?.apps || activeCol.data.apps.length === 0) && (
+                                            <div style={{ gridColumn: '1 / -1', color: '#475569', fontSize: '0.85rem', textAlign: 'center', padding: '1rem', fontStyle: 'italic' }}>
+                                                No tracked activity for this interval
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        {/* Chart Legend */}
+                        <div className="st-chart-legend" style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', marginTop: '1.5rem', fontSize: '0.85rem' }}>
+                            {top5Names.map(name => {
+                                const sumData = chartSummary.find(s => s.name === name);
+                                if (!sumData) return null;
+                                const h = Math.floor(sumData.total_seconds / 3600);
+                                const m = Math.floor((sumData.total_seconds % 3600) / 60);
+                                return (
+                                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: getChartAppColor(name) }}></div>
+                                        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>{name}</span>
+                                        <span style={{ color: '#94a3b8' }}>{h}h {m}m ({sumData.percentage}%)</span>
+                                    </div>
+                                );
+                            })}
+
+                            {chartSummary.filter(s => !top5Names.includes(s.name)).length > 0 && (() => {
+                                const otherSum = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.total_seconds, 0);
+                                const otherPct = chartSummary.filter(s => !top5Names.includes(s.name)).reduce((acc, s) => acc + s.percentage, 0);
+                                const h = Math.floor(otherSum / 3600);
+                                const m = Math.floor((otherSum % 3600) / 60);
+                                return (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        <div style={{ width: '12px', height: '12px', borderRadius: '3px', backgroundColor: '#888888' }}></div>
+                                        <span style={{ color: '#e2e8f0', fontWeight: 'bold' }}>Other</span>
+                                        <span style={{ color: '#94a3b8' }}>{h}h {m}m ({otherPct}%)</span>
+                                    </div>
+                                );
+                            })()}
+                        </div>
                     </div>
                 </div>
 
@@ -298,15 +661,8 @@ export default function ScreenTimePage() {
                                 <p>No activity detected yet. Start using apps to see magic!</p>
                             </div>
                         )}
-                        {displayedApps.map(([appName, time]) => {
-                            let icon = '📱';
-                            if (appName.includes('Chrome')) icon = '🟡';
-                            else if (appName.includes('Edge')) icon = '🔵';
-                            else if (appName.includes('Brave')) icon = '🦁';
-                            else if (appName.includes('Firefox')) icon = '🦊';
-                            else if (appName.includes('Code') || appName.includes('Vite')) icon = '⌨️';
-                            else if (appName.includes('Terminal') || appName.includes('cmd') || appName.includes('PowerShell')) icon = '🐚';
-
+                        {displayedApps.map((app) => {
+                            const { name: appName, time, icon } = app;
                             const percent = Math.min(((time / totalSeconds) * 100).toFixed(1), 100);
                             const domains = webActivityMap[appName]?.sort((a, b) => b.time - a.time) || [];
                             const isExpanded = showAllDomainsFor[appName];
@@ -315,7 +671,30 @@ export default function ScreenTimePage() {
                                 <div key={appName} className="st-app-item">
                                     <div className="st-app-header">
                                         <div className="st-app-meta">
-                                            <span className="st-app-icon-bg">{icon}</span>
+                                            {icon ? (
+                                                <img
+                                                    src={icon}
+                                                    width={36}
+                                                    height={36}
+                                                    style={{ borderRadius: 8, flexShrink: 0, objectFit: 'contain', background: 'rgba(255,255,255,0.03)', padding: '4px' }}
+                                                    alt={appName}
+                                                />
+                                            ) : (
+                                                <div style={{
+                                                    width: 36, height: 36,
+                                                    borderRadius: 8,
+                                                    background: 'rgba(255,255,255,0.08)',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    justifyContent: 'center',
+                                                    fontSize: 18,
+                                                    flexShrink: 0,
+                                                    color: '#94a3b8',
+                                                    fontWeight: 'bold'
+                                                }}>
+                                                    {appName.charAt(0).toUpperCase()}
+                                                </div>
+                                            )}
                                             <div>
                                                 <div className="st-app-name-row">
                                                     <span className="st-app-title">{appName}</span>
@@ -392,7 +771,11 @@ export default function ScreenTimePage() {
 
                             return (
                                 <div key={idx} className="st-bg-app-card">
-                                    <div className="st-bg-app-icon">{icon}</div>
+                                    <div className="st-bg-app-icon">
+                                        {app.icon ? (
+                                            <img src={app.icon} width={24} height={24} style={{ borderRadius: 4, objectFit: 'contain' }} alt="" />
+                                        ) : icon}
+                                    </div>
                                     <div className="st-bg-app-info">
                                         <div className="st-bg-app-name">{app.app}</div>
                                         <div className="st-bg-app-title" title={app.title}>{app.title}</div>

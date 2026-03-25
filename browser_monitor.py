@@ -12,29 +12,39 @@ from watchdog.events import FileSystemEventHandler
 import websockets
 from websockets.http11 import Response
 from websockets.datastructures import Headers
+from port_utils import kill_port_holder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("BrowserMonitor")
+
 
 # 1. BROWSER_PROFILES dictionary mapping browser name to list of possible history db paths
 BROWSER_PROFILES = {
     "Chrome": [
         os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/Google/Chrome/Default/History"),
-        os.path.expanduser(r"~/.config/google-chrome/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Google/Chrome/Profile*/History"),
+        os.path.expanduser(r"~/.config/google-chrome/Default/History"),
+        os.path.expanduser(r"~/.config/google-chrome/Profile*/History")
     ],
     "Edge": [
         os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/Microsoft Edge/Default/History"),
-        os.path.expanduser(r"~/.config/microsoft-edge/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Microsoft Edge/Profile*/History"),
+        os.path.expanduser(r"~/.config/microsoft-edge/Default/History"),
+        os.path.expanduser(r"~/.config/microsoft-edge/Profile*/History")
     ],
     "Firefox": [
         os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles\*.default*\places.sqlite"),
+        os.path.expandvars(r"%APPDATA%\Mozilla\Firefox\Profiles\*.default-release*\places.sqlite"),
         os.path.expanduser(r"~/Library/Application Support/Firefox/Profiles/*.default*/places.sqlite"),
         os.path.expanduser(r"~/.mozilla/firefox/*.default*/places.sqlite")
     ],
     "Brave": [
         os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\History"),
+        os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Profile*\History"),
         os.path.expanduser(r"~/Library/Application Support/BraveSoftware/Brave-Browser/Default/History"),
         os.path.expanduser(r"~/.config/BraveSoftware/Brave-Browser/Default/History")
     ],
@@ -50,7 +60,7 @@ BROWSER_PROFILES = {
     ],
     "Arc": [
         os.path.expandvars(r"%LOCALAPPDATA%\Packages\TheBrowserCompany*\LocalCache\Local\Arc\User Data\Default\History"),
-        os.path.expanduser(r"~/Library/Application Support/Arc/User Data/Default/History")
+        os.path.expanduser(r"~/Library/Application Support/Arc/User Data\Default\History")
     ]
 }
 
@@ -58,17 +68,27 @@ DETECTED_BROWSERS = {}
 
 def scan_browsers():
     detected = {}
-    for name, paths in BROWSER_PROFILES.items():
-        found = False
-        for p in paths:
-            matches = glob.glob(p)
-            for m in matches:
-                if os.path.exists(m):
-                    detected[name] = m
-                    found = True
-                    break
-            if found:
-                break
+    for name, patterns in BROWSER_PROFILES.items():
+        matches = []
+        for p in patterns:
+            matches.extend(glob.glob(p))
+            
+        # If multiple profiles exist, pick the one with the most recent modification time
+        best_match = None
+        best_mtime = 0
+        for m in matches:
+            if os.path.exists(m):
+                try:
+                    mtime = os.path.getmtime(m)
+                    if mtime > best_mtime:
+                        best_mtime = mtime
+                        best_match = m
+                except:
+                    pass
+        
+        if best_match:
+            detected[name] = best_match
+            
     return detected
 
 def query_history(browser_name, db_path):
@@ -82,7 +102,7 @@ def query_history(browser_name, db_path):
         os.close(fd)
         shutil.copy2(db_path, tmp)
         
-        conn = sqlite3.connect(tmp)
+        conn = sqlite3.connect(f"file:{tmp}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         
         if browser_name == "Firefox":
@@ -190,7 +210,8 @@ async def push_browser_data(browser_name, target_clients=None):
         status = "info"
     else:
         try:
-            tabs = query_history(browser_name, db_path)
+            # Query history is a heavy operation (copying file + sqlite query)
+            tabs = await asyncio.to_thread(query_history, browser_name, db_path)
             if not tabs:
                 error = f"No recent tabs found in {browser_name}."
                 status = "info"
@@ -219,9 +240,19 @@ async def process_event(browser_name):
     await asyncio.sleep(0.1)
     await push_browser_data(browser_name)
 
-def update_watchers(loop):
+async def periodic_scan():
+    loop = asyncio.get_running_loop()
+    # Initial scan
+    new_detected = await asyncio.to_thread(scan_browsers)
+    await update_watchers_async(loop, new_detected)
+    
+    while True:
+        await asyncio.sleep(60)
+        new_detected = await asyncio.to_thread(scan_browsers)
+        await update_watchers_async(loop, new_detected)
+
+async def update_watchers_async(loop, new_detected):
     global DETECTED_BROWSERS, browser_handlers
-    new_detected = scan_browsers()
     changed = False
     
     for name, path in new_detected.items():
@@ -235,16 +266,9 @@ def update_watchers(loop):
             logger.info(f"Started watching {name} at {path}")
             
     if changed:
-        asyncio.run_coroutine_threadsafe(push_detected_browsers(), loop)
+        await push_detected_browsers()
         for name in DETECTED_BROWSERS:
-            asyncio.run_coroutine_threadsafe(push_browser_data(name), loop)
-
-async def periodic_scan():
-    loop = asyncio.get_running_loop()
-    update_watchers(loop)
-    while True:
-        await asyncio.sleep(60)
-        update_watchers(loop)
+            await push_browser_data(name)
 
 async def check_new_processes():
     loop = asyncio.get_running_loop()
@@ -252,12 +276,14 @@ async def check_new_processes():
     browsers = ['chrome', 'edge', 'firefox', 'brave', 'opera', 'vivaldi', 'arc']
     while True:
         try:
-            for p in psutil.process_iter(['name']):
-                if p.pid not in seen_pids:
-                    seen_pids.add(p.pid)
-                    name = (p.info['name'] or '').lower()
+            # Iterating over processes can be slow
+            process_info = await asyncio.to_thread(lambda: [(p.pid, (p.info['name'] or '').lower()) for p in psutil.process_iter(['name'])])
+            for pid, name in process_info:
+                if pid not in seen_pids:
+                    seen_pids.add(pid)
                     if any(b in name for b in browsers):
-                        update_watchers(loop)
+                        new_detected = await asyncio.to_thread(scan_browsers)
+                        await update_watchers_async(loop, new_detected)
         except Exception:
             pass
         await asyncio.sleep(5)
@@ -289,6 +315,7 @@ async def main():
             )
         return None
 
+    await asyncio.to_thread(kill_port_holder, 8999)
     # Use 127.0.0.1 to match what the frontend is now calling
     async with websockets.serve(register, "127.0.0.1", 8999, process_request=process_request):
         logger.info("Browser Monitor WebSocket active on ws://127.0.0.1:8999/browser-monitor")

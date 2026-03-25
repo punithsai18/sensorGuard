@@ -2275,8 +2275,8 @@
 .st-card-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 1.5rem;
+  align-items: flex-start;
+  margin-bottom: 0.75rem;
 }
 
 .st-card-header h3 {
@@ -2447,8 +2447,9 @@
 .st-chart-wrapper {
   flex: 1;
   display: flex;
-  align-items: flex-end;
-  padding-bottom: 2rem;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
   min-height: 200px;
 }
 
@@ -2672,4 +2673,112 @@
   grid-column: 1 / -1;
   text-align: center;
   padding: 1rem 0;
+}
+/* ── Risk Score Matrix ────────────────────────────────────────────────────── */
+
+/* Risk rating alert banners */
+.lm-risk-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.9rem 1.25rem;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+.lm-risk-alert-high {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fca5a5;
+}
+
+.lm-risk-alert-high strong {
+  color: #ef4444;
+  font-size: 0.95rem;
+}
+
+.lm-risk-alert-medium {
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fcd34d;
+}
+
+.lm-risk-alert-medium strong {
+  color: #f59e0b;
+  font-size: 0.95rem;
+}
+
+/* Risk rating badge */
+.lm-risk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* Overall score display */
+.lm-risk-overall {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.85rem 1.25rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-top: 1px solid #1e293b;
+  border-radius: 0 0 8px 8px;
+  flex-wrap: wrap;
+}
+
+.lm-risk-score-big {
+  font-size: 2.2rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.lm-risk-score-label {
+  font-size: 0.7rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: 0.15rem;
+}
+
+.lm-risk-summary {
+  flex: 1;
+  min-width: 0;
+}
+
+.lm-risk-summary p {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Score bar inside table cells */
+.lm-score-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lm-score-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.lm-score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
 }
